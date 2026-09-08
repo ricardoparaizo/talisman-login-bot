@@ -1,0 +1,40 @@
+# Metadados de versao gravados dentro do TalismanLoginBot.exe.
+#
+# Por que isso existe: um .exe SEM esses campos (sem nome, sem fabricante,
+# sem versao) e um sinal classico de arquivo suspeito pros antivirus que
+# usam heuristica/IA -- repare que varias das deteccoes que aparecem no
+# VirusTotal sao literalmente do tipo "blank" (arquivo em branco/generico).
+# Preencher isso nao resolve tudo sozinho, mas tira um dos sinais que fazem
+# o executavel parecer anonimo.
+#
+# Usado pelo build_exe.bat atraves do parametro --version-file.
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          '041604B0',
+          [StringStruct('CompanyName', 'The Simitar Beast'),
+           StringStruct('FileDescription', 'Talisman Online - Login Bot'),
+           StringStruct('FileVersion', '1.0.0.0'),
+           StringStruct('InternalName', 'TalismanLoginBot'),
+           StringStruct('LegalCopyright', 'The Simitar Beast'),
+           StringStruct('OriginalFilename', 'TalismanLoginBot.exe'),
+           StringStruct('ProductName', 'Talisman Online - Login Bot'),
+           StringStruct('ProductVersion', '1.0.0.0'),
+           StringStruct('Comments', 'Automatiza o login no Talisman Online. Nao envia dados para lugar nenhum.')])
+      ]),
+    VarFileInfo([VarStruct('Translation', [1046, 1200])])
+  ]
+)

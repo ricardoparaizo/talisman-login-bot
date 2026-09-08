@@ -1,0 +1,25 @@
+# Gerados pelo PyInstaller quando voce roda o build_exe.bat
+build/
+dist/
+*.spec
+
+# Dados do usuario -- NUNCA devem ir pro repositorio.
+# Hoje eles ficam em "Documentos/Bot Login - Talisman Online", mas quem
+# vier de uma versao antiga pode ter esses arquivos aqui na pasta.
+perfis.json
+perfil.json
+bot.log
+PARAR.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Editores / sistema
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
