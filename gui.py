@@ -3,11 +3,22 @@ Interface grafica do bot, feita com CustomTkinter (biblioteca pura em
 Python, MIT, sem dependencias pesadas -- so um wrapper sobre o Tkinter que
 ja vem com o Python, entao continua simples/baixo risco pro antivirus).
 
-Visual: MMORPG dos anos 2000, no estilo da propria interface do Talisman
-Online -- fundo quase preto, molduras azuis, ciano de acento, rotulos
-dourados, cantos retos e botoes com gradiente e relevo. As cores e os
-widgets desenhados vivem no skin.py; aqui ficam so o layout e o
-comportamento.
+Visual: vidro fosco escuro e roxo -- fundo quase preto, cantos arredondados
+e um unico acento roxo/violeta. As cores vivem no skin.py; aqui ficam so o
+layout e o comportamento.
+
+Sobre o "vidro" de verdade (desfoque do que esta atras da janela): as APIs
+de composicao do Windows (pywinstyles "acrylic"/"mica",
+DwmEnableBlurBehindWindow) foram tentadas e descartadas -- CustomTkinter
+desenha a janela inteira de forma opaca, entao nao sobra nenhum "buraco"
+pra essas APIs mostrarem blur, e a "acrylic" ainda por cima ignorava a cor
+configurada e lavava tudo num cinza neutro. A solucao que funciona de
+verdade esta em App._apply_frosted_backdrop: a barra lateral e a area
+principal viram cartoes solidos com um respiro ao redor, e esse respiro
+mostra uma imagem borrada de verdade (captura de tela + Pillow, uma vez na
+abertura). Limitacao assumida: como a captura e feita so na abertura, se
+voce mover/redimensionar a janela depois o "vidro" nao acompanha o que
+passou a ficar atras.
 
 Layout em barra lateral + painel de detalhes:
 
@@ -64,9 +75,9 @@ KNOWN_SERVERS = [
 ]
 
 # ---------------------------------------------------------------- paleta ----
-# As cores vivem no skin.py, amostradas de prints da interface do proprio
-# Talisman Online. Os apelidos abaixo existem pra o resto deste arquivo
-# continuar lendo do mesmo jeito de antes -- so o que eles APONTAM mudou.
+# As cores vivem no skin.py. Os apelidos abaixo existem pra o resto deste
+# arquivo continuar lendo do mesmo jeito de antes -- so o que eles APONTAM
+# mudou.
 BG = skin.BG_APP           # fundo do conteudo
 BG_SIDEBAR = skin.BG_SIDEBAR
 SURFACE = skin.BG_PANEL    # painel do log
@@ -74,9 +85,9 @@ SURFACE_ALT = skin.BG_SUNKEN   # campos de texto (afundados)
 SURFACE_HOVER = skin.BG_ROW_HOVER
 ROW_HOVER = skin.BG_ROW_HOVER
 ROW_SELECTED = skin.BG_ROW_SEL
-BORDER = skin.EDGE_DARK
-BORDER_STRONG = skin.EDGE_LIGHT
-BORDER_FOCUS = skin.CYAN   # campo em foco ganha o ciano de acento
+BORDER = skin.EDGE
+BORDER_STRONG = skin.EDGE_STRONG
+BORDER_FOCUS = skin.ACCENT_BRIGHT   # campo em foco ganha o roxo de acento
 
 WHITE = skin.TEXT
 TEXT = skin.TEXT
@@ -84,13 +95,12 @@ TEXT_SECOND = skin.TEXT_SOFT
 TEXT_MUTED = skin.TEXT_MUTED
 TEXT_DIM = skin.TEXT_DIM
 
-DOT_IDLE = "#4d6273"       # bolinha "parado"
-DOT_RUNNING = skin.CYAN    # bolinha "rodando" -- ciano = atividade
+DOT_IDLE = skin.TEXT_DIM   # bolinha "parado"
+DOT_RUNNING = skin.ACCENT_BRIGHT   # bolinha "rodando"
 
 DANGER = skin.DANGER       # acao destrutiva + erro no log
-DANGER_HOVER_BG = "#2a1414"
 WARNING = skin.WARNING     # aviso no log
-GOLD = skin.GOLD           # rotulos de campo e titulos de secao
+LABEL = skin.ACCENT_BRIGHT   # rotulos de campo e titulos de secao
 
 FONT_FAMILY = skin.FONT
 FONT_MONO_FAMILY = skin.FONT_MONO
@@ -120,35 +130,39 @@ class QueueLogHandler(logging.Handler):
 
 # --------------------------------------------------------------- botoes ----
 # Tres pesos, sempre os mesmos, pra a tela ter hierarquia em vez de uma
-# fileira de botoes todos gritando igual. Agora todos sao skin.GameButton
-# (Canvas com gradiente e bevel) em vez de CTkButton -- a assinatura das
-# tres funcoes continua a mesma, entao o resto do arquivo nao mudou.
+# fileira de botoes todos gritando igual. `bg`/`hover_bg`/`color` continuam
+# aceitos por compatibilidade com quem chama (a versao anterior, em Canvas,
+# precisava saber o fundo ao redor pra nao deixar um retangulo destoando) --
+# o CTkButton nao precisa mais disso, entao esses parametros sao ignorados.
 
 
 def primary_button(master, text, command, width=120, bg=None):
-    """Acao principal: dourada, como o botao que confirma as caixas de
-    dialogo do jogo. So uma por area da tela."""
-    return skin.GameButton(
-        master, text=text, command=command, variant="primary",
-        width=width, height=32, font_size=12, bold=True, bg=bg,
+    """Acao principal: acento roxo solido. So uma por area da tela."""
+    return ctk.CTkButton(
+        master, text=text, command=command, width=width, height=32,
+        corner_radius=skin.RADIUS_SM, fg_color=skin.ACCENT,
+        hover_color=skin.ACCENT_BRIGHT, text_color="#f7f4fc",
+        font=_font(12, "bold"), border_width=0,
     )
 
 
 def ghost_button(master, text, command, width=120, height=32, bg=None):
-    """Acao secundaria: o azul padrao dos botoes do jogo."""
-    return skin.GameButton(
-        master, text=text, command=command, variant="normal",
-        width=width, height=height, font_size=11, bg=bg,
+    """Acao secundaria: superficie neutra com contorno sutil."""
+    return ctk.CTkButton(
+        master, text=text, command=command, width=width, height=height,
+        corner_radius=skin.RADIUS_SM, fg_color=skin.BTN_BG,
+        hover_color=skin.BTN_HOVER, text_color=TEXT,
+        border_width=1, border_color=BORDER_STRONG, font=_font(11),
     )
 
 
 def text_button(master, text, command, width=90, height=24, color=None, hover_bg=None, bg=None):
-    """Acao terciaria: so texto, sem caixa nenhuma. `color`/`hover_bg` sao
-    aceitos e ignorados -- a variante 'link' do skin ja define as duas
-    cores (apagada parada, ciano no hover)."""
-    return skin.GameButton(
-        master, text=text, command=command, variant="link",
-        width=width, height=height, font_size=10, bg=bg,
+    """Acao terciaria: so texto, com um leve realce arredondado no hover."""
+    return ctk.CTkButton(
+        master, text=text, command=command, width=width, height=height,
+        corner_radius=skin.RADIUS_SM, fg_color="transparent",
+        hover_color=skin.BG_ROW_HOVER, text_color=color or TEXT_MUTED,
+        font=_font(10), border_width=0,
     )
 
 
@@ -187,7 +201,7 @@ class AccountRow(ctk.CTkFrame):
     escolher."""
 
     def __init__(self, master, app, account, server, character, is_running):
-        super().__init__(master, fg_color="transparent", corner_radius=0)
+        super().__init__(master, fg_color="transparent", corner_radius=skin.RADIUS_SM)
         self.app = app
         self.account = account
         self.selected = False
@@ -210,12 +224,12 @@ class AccountRow(ctk.CTkFrame):
             width=18,
             checkbox_width=15,
             checkbox_height=15,
-            corner_radius=0,
+            corner_radius=4,
             border_width=1,
-            fg_color=skin.CYAN,
-            hover_color=skin.CYAN_SOFT,
-            checkmark_color="#06202a",
-            border_color=skin.CYAN_SOFT,
+            fg_color=skin.ACCENT,
+            hover_color=skin.ACCENT_BRIGHT,
+            checkmark_color=skin.BG_APP,
+            border_color=skin.ACCENT_SOFT,
         )
         self.checkbox.grid(row=0, column=1, rowspan=2, padx=(12, 9), pady=6)
 
@@ -287,6 +301,13 @@ class App(ctk.CTk):
         self.configure(fg_color=BG)
         self._set_window_icon()
 
+        # Fundo "vidro": ocupa a janela inteira, por baixo de tudo (por
+        # isso e criado antes de qualquer outro widget). So aparece de
+        # verdade no respiro ao redor da barra lateral/area principal --
+        # ver _apply_frosted_backdrop, chamado no fim do __init__.
+        self._backdrop_label = tk.Label(self, bd=0, highlightthickness=0, bg=BG)
+        self._backdrop_label.place(x=0, y=0, relwidth=1, relheight=1)
+
         self.log_queue = queue.Queue()
         # contas que terminaram; preenchida pelas threads dos bots e
         # esvaziada pela thread da interface (veja _bot_thread_target)
@@ -315,6 +336,9 @@ class App(ctk.CTk):
         self._load_launcher_path()
         self._poll_log_queue()
         self._try_dark_titlebar()
+        # Adiada: precisa que a janela ja esteja de fato na tela (posicao
+        # final) pra capturar o que esta atras dela corretamente.
+        self.after(150, self._apply_frosted_backdrop)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -354,31 +378,85 @@ class App(ctk.CTk):
         except Exception:  # noqa: BLE001 - so um detalhe visual, nunca deve travar a UI
             pass
 
+    def _apply_frosted_backdrop(self):
+        """Captura o que esta atras da janela e aplica um blur forte de
+        verdade (Pillow), uma unica vez -- e o que faz o respiro ao redor
+        da barra lateral/area principal parecer vidro fosco. As tres APIs
+        de composicao do Windows testadas (pywinstyles "acrylic"/"mica",
+        DwmEnableBlurBehindWindow) nao mostraram blur nenhum nessa
+        maquina, entao essa e a unica forma que funciona de verdade.
+
+        Feito uma vez so, na abertura: esconde a janela por uma fracao de
+        segundo (imperceptivel), tira um "print" exatamente da area onde
+        ela esta, borra e usa como fundo. Se voce mover/redimensionar a
+        janela depois, essa imagem NAO acompanha -- fica a textura
+        capturada na abertura. Se falhar por qualquer motivo (Pillow sem
+        suporte a screenshot nesse sistema, etc.), so fica sem o efeito --
+        o tema roxo-escuro solido continua aparecendo normalmente."""
+        try:
+            from PIL import Image, ImageFilter, ImageGrab, ImageTk
+
+            self.update_idletasks()
+            width, height = self.winfo_width(), self.winfo_height()
+            x, y = self.winfo_rootx(), self.winfo_rooty()
+            if width <= 1 or height <= 1:
+                return
+
+            self.withdraw()
+            self.update()
+            try:
+                shot = ImageGrab.grab(bbox=(x, y, x + width, y + height))
+            finally:
+                self.deiconify()
+
+            blurred = shot.filter(ImageFilter.GaussianBlur(30)).convert("RGB")
+            tint = Image.new("RGB", blurred.size, skin.rgb(skin.BG_APP))
+            glass = Image.blend(blurred, tint, 0.6)
+
+            # a referencia precisa ser guardada num atributo -- sem isso o
+            # Python coleta o PhotoImage e a imagem some da tela sozinha.
+            self._backdrop_photo = ImageTk.PhotoImage(glass)
+            self._backdrop_label.configure(image=self._backdrop_photo)
+        except Exception:  # noqa: BLE001 - efeito visual, nunca deve travar o app
+            pass
+
     # ---------------------------------------------------- barra de titulo
 
     def _build_title_strip(self):
-        """A faixa azul com o nome do app, atravessando a janela inteira.
-
-        E o elemento que mais entrega o estilo, e resolve de quebra um
+        """A faixa com o nome do app, atravessando a janela inteira, com
+        uma linha bem sutil separando do resto. Resolve de quebra um
         problema antigo: o nome do app morava na barra lateral, que tem
         largura fixa, e quebrava em duas linhas ("Bot Login - Talisman /
         Online"). Aqui em cima ele tem a janela toda pra caber."""
-        strip = skin.TitleStrip(self, APP_NAME.upper(), height=34,
-                                subtitle=f"{APP_AUTHOR}  {APP_VERSION}")
-        strip.grid(row=0, column=0, columnspan=2, sticky="we")
+        container = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        container.grid(row=0, column=0, columnspan=2, sticky="we")
+        container.grid_columnconfigure(0, weight=1)
+
+        strip = ctk.CTkFrame(container, height=34, fg_color=BG_SIDEBAR, corner_radius=0)
+        strip.grid(row=0, column=0, sticky="we")
+        strip.grid_propagate(False)
+        strip.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            strip, text=_tracked(APP_NAME.upper()), font=_font(11, "bold"),
+            text_color=skin.ACCENT_BRIGHT, anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=16)
+        ctk.CTkLabel(
+            strip, text=f"{APP_AUTHOR}   {APP_VERSION}", font=_font(9),
+            text_color=TEXT_MUTED, anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=16)
+
+        hairline(container, bg=BG).grid(row=1, column=0, sticky="we")
 
     # ------------------------------------------------------ barra lateral
 
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(self, width=296, fg_color=BG_SIDEBAR, corner_radius=0)
-        sidebar.grid(row=1, column=0, sticky="ns")
+        # Respiro em volta -- e o que deixa o fundo borrado (backdrop_label)
+        # visivel, dando o ar de "cartao flutuando sobre vidro fosco".
+        sidebar = ctk.CTkFrame(self, width=296, fg_color=BG_SIDEBAR, corner_radius=skin.RADIUS_LG)
+        sidebar.grid(row=1, column=0, sticky="ns", padx=(14, 7), pady=(0, 14))
         sidebar.grid_propagate(False)
         sidebar.grid_rowconfigure(3, weight=1)
         sidebar.grid_columnconfigure(0, weight=1)
-
-        # borda direita de 1px, separando da area de conteudo
-        edge = ctk.CTkFrame(self, width=1, fg_color=skin.EDGE_PANEL, corner_radius=0)
-        edge.grid(row=1, column=0, sticky="nse")
 
         # -- cabecalho --
         # O nome do app agora vive na faixa de titulo, no topo da janela;
@@ -425,7 +503,7 @@ class App(ctk.CTk):
         section.grid(row=2, column=0, sticky="we", padx=22, pady=(16, 6))
         section.grid_columnconfigure(0, weight=1)
         self.section_label = ctk.CTkLabel(
-            section, text=_tracked("CONTAS"), font=_font(9, "bold"), text_color=GOLD, anchor="w"
+            section, text=_tracked("CONTAS"), font=_font(9, "bold"), text_color=LABEL, anchor="w"
         )
         self.section_label.grid(row=0, column=0, sticky="w")
         self.btn_stop = text_button(section, "parar todas", self._stop_bot, width=76, height=22,
@@ -437,14 +515,14 @@ class App(ctk.CTk):
         self.account_list_frame = ctk.CTkScrollableFrame(
             sidebar,
             fg_color=skin.BG_SUNKEN,
-            corner_radius=0,
+            corner_radius=skin.RADIUS_MD,
             border_width=1,
             border_color=skin.EDGE_PANEL,
             # bem discreta: o CTk nao esconde a barra sozinho quando a lista
             # cabe inteira, entao ela fica quase invisivel parada e so
             # aparece de verdade quando voce passa o mouse/rola.
-            scrollbar_button_color="#1b3646",
-            scrollbar_button_hover_color=skin.CYAN_DIM,
+            scrollbar_button_color=skin.SCROLLBAR_IDLE,
+            scrollbar_button_hover_color=skin.SCROLLBAR_HOVER,
         )
         self.account_list_frame.grid(row=3, column=0, sticky="nswe", padx=(14, 8), pady=(0, 8))
         self.account_list_frame.grid_columnconfigure(0, weight=1)
@@ -462,8 +540,8 @@ class App(ctk.CTk):
     # ---------------------------------------------------------- main area
 
     def _build_main_area(self):
-        main = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        main.grid(row=1, column=1, sticky="nswe")
+        main = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=skin.RADIUS_LG)
+        main.grid(row=1, column=1, sticky="nswe", padx=(7, 14), pady=(0, 14))
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=0)
         main.grid_rowconfigure(4, weight=1)
@@ -476,7 +554,7 @@ class App(ctk.CTk):
         header = ctk.CTkFrame(master, fg_color="transparent")
         header.grid(row=0, column=0, sticky="we", padx=34, pady=(28, 0))
         self.page_title = ctk.CTkLabel(
-            header, text="Adicione uma conta", font=_font(15, "bold"), text_color=skin.CYAN, anchor="w"
+            header, text="Adicione uma conta", font=_font(15, "bold"), text_color=skin.ACCENT_BRIGHT, anchor="w"
         )
         self.page_title.pack(anchor="w")
         self.page_sub = ctk.CTkLabel(
@@ -527,7 +605,7 @@ class App(ctk.CTk):
             border_width=1,
             text_color=TEXT,
             font=_font(12),
-            corner_radius=0,
+            corner_radius=skin.RADIUS_SM,
             height=32,
         )
         # anel de foco -- feedback de qual campo esta ativo, sem cor nenhuma
@@ -536,7 +614,7 @@ class App(ctk.CTk):
         return entry
 
     def _field_label(self, master, text):
-        return ctk.CTkLabel(master, text=text, font=_font(10), text_color=GOLD, anchor="w")
+        return ctk.CTkLabel(master, text=text, font=_font(10), text_color=LABEL, anchor="w")
 
     def _build_form(self, tab):
         """Formulario unico da conta: login/senha, servidor/nick e a pasta
@@ -558,15 +636,15 @@ class App(ctk.CTk):
             fg_color=SURFACE_ALT,
             border_color=BORDER_STRONG,
             border_width=1,
-            button_color=skin.BTN_BOT,
-            button_hover_color=skin.BTN_TOP,
+            button_color=skin.ACCENT_DIM,
+            button_hover_color=skin.ACCENT,
             dropdown_fg_color=skin.BG_PANEL,
-            dropdown_hover_color=skin.BTN_BOT,
+            dropdown_hover_color=skin.ACCENT_DIM,
             dropdown_text_color=TEXT,
             dropdown_font=_font(11),
             text_color=TEXT,
             font=_font(12),
-            corner_radius=0,
+            corner_radius=skin.RADIUS_SM,
             height=32,
         )
         self.combo_server.set("")
@@ -639,7 +717,7 @@ class App(ctk.CTk):
         head.grid(row=0, column=0, sticky="we", pady=(0, 8))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            head, text=_tracked("REGISTRO"), font=_font(9, "bold"), text_color=GOLD, anchor="w"
+            head, text=_tracked("REGISTRO"), font=_font(9, "bold"), text_color=LABEL, anchor="w"
         ).grid(row=0, column=0, sticky="w")
         text_button(head, "limpar", self._clear_log, width=60, height=22,
                     bg=BG).grid(row=0, column=1, sticky="e")
@@ -650,12 +728,12 @@ class App(ctk.CTk):
             border_color=skin.EDGE_PANEL,
             border_width=1,
             text_color=TEXT_SECOND,
-            corner_radius=0,
+            corner_radius=skin.RADIUS_MD,
             font=_font(11, family=FONT_MONO_FAMILY),
             wrap="word",
             activate_scrollbars=True,
-            scrollbar_button_color="#1b3646",
-            scrollbar_button_hover_color=skin.CYAN_DIM,
+            scrollbar_button_color=skin.SCROLLBAR_IDLE,
+            scrollbar_button_hover_color=skin.SCROLLBAR_HOVER,
         )
         self.log_text.grid(row=1, column=0, sticky="nswe")
         self.log_text.configure(state="disabled")
@@ -727,8 +805,8 @@ class App(ctk.CTk):
             tearoff=0,
             bg=skin.BG_PANEL,
             fg=skin.TEXT_SOFT,
-            activebackground=skin.BTN_BOT,
-            activeforeground=skin.CYAN,
+            activebackground=skin.ACCENT_DIM,
+            activeforeground=skin.ACCENT_BRIGHT,
             bd=0,
             relief="flat",
             font=(FONT_FAMILY, 9),
