@@ -1,21 +1,22 @@
 """
-Reconhecimento de tela com suporte a diferentes resolucoes do jogo.
+Reconhecimento de tela do jogo.
 
 O Talisman Online deixa escolher a resolucao nas opcoes de video (de 800x600
-até 1920x1080 widescreen). Os templates em templates/ foram recortados de
-prints numa janela de ~1024x768 (a resolucao mais usada, segundo o
-`base_resolution_width/height` em config.json). Se o jogo estiver rodando
-numa resolucao diferente, os elementos da interface aparecem maiores ou
-menores na tela -- por isso, em vez de procurar so no tamanho original do
-template (que so bateria certinho em 1024x768), este modulo:
+até 1920x1080 widescreen), mas isso so muda quanto CENARIO aparece ao redor
+(tipo um FOV mais largo) -- os dialogos/textos/botoes da interface sao
+desenhados sempre no MESMO tamanho em pixels, em qualquer resolucao.
+Confirmado comparando um print em resolucao widescreen com os templates:
+a caixa de login bate pixel a pixel com o template original, sem esticar.
 
-1. Tenta localizar a janela do jogo pelo titulo e le o tamanho real dela.
-2. Calcula um fator de escala comparando esse tamanho com a resolucao base.
-3. Redimensiona os templates por esse fator antes de procurar na tela.
-
-Se a janela do jogo nao for encontrada (por exemplo, se o titulo mudar), o
-bot cai de volta para o comportamento simples: procura na tela toda, sem
-redimensionar (equivalente a assumir escala 1.0 / resolucao base).
+Por isso compute_scale() abaixo sempre devolve 1.0 -- os templates (todos
+recortados de um print em ~1024x768) sao procurados no proprio tamanho
+original, sem redimensionar, no que der de resolucao. Ja existiu aqui uma
+tentativa de calcular um fator de escala comparando o tamanho da JANELA
+com a resolucao base (`base_resolution_width/height` em config.json), mas
+isso partia da premissa errada de que a UI escala com a janela -- o que
+fazia o reconhecimento falhar em qualquer resolucao com proporcao diferente
+de 4:3 (ex: 1200x720), mesmo depois de corrigido o problema de DPI-awareness
+que afetava a medicao do tamanho da janela (veja paths.py).
 """
 
 import logging
@@ -54,14 +55,11 @@ def find_game_window(title_keyword="Talisman"):
 
 
 def compute_scale(window_width, window_height, base_width, base_height):
-    """Fator de escala comparando a janela atual com a resolucao em que os
-    templates foram capturados. Usa a media entre largura/altura porque as
-    duas costumam ficar bem proximas (mesma proporcao de tela)."""
-    if not window_width or not window_height or not base_width or not base_height:
-        return 1.0
-    scale_w = window_width / base_width
-    scale_h = window_height / base_height
-    return (scale_w + scale_h) / 2
+    """Sempre 1.0: a interface do jogo e desenhada em tamanho fixo (em
+    pixels), nao escala com a resolucao da janela -- so a quantidade de
+    cenario ao redor muda. Os parametros continuam aceitos so pra nao
+    quebrar quem chama (bot.py passa o tamanho da janela nos dois modos)."""
+    return 1.0
 
 
 def get_capture_context(base_width, base_height, window_title_keyword):
