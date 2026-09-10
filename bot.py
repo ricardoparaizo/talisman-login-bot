@@ -437,6 +437,20 @@ class Bot:
         """Chamar quando o login claramente deu certo (chegamos na tela de
         servidor/personagem/fila ou no jogo)."""
         self._logins_sem_progresso = 0
+        if self._limpeza_reativada:
+            # A limpeza emergencial (32 Backspace + 32 Delete por campo) fez
+            # efeito -- desliga de novo em vez de deixar ligada pro resto da
+            # sessao. Sem isso, um unico soluco de rede (comum nesse jogo)
+            # deixava o bot mandando essas 64 teclas extras em TODO login
+            # dali em diante, que e a suspeita principal da digitacao
+            # aleatoria em outras janelas. Assim ela so fica ativa enquanto
+            # o problema realmente persiste, e volta a tentar sem limpar na
+            # proxima vez -- so reativando nada se travar de novo.
+            self._limpeza_reativada = False
+            self.log.info(
+                "Login voltou a progredir -- desligando a limpeza por teclado "
+                "que tinha sido religada, voltando ao padrao do config.json."
+            )
 
     def _contar_tentativa_de_login(self):
         """Chamar toda vez que preenchemos conta/senha. Se isso acontecer

@@ -59,7 +59,7 @@ Se você prefere não confiar num `.exe` de estranho — o que é uma postura se
 
 ## Se alguma tela não for reconhecida
 
-O bot identifica as telas comparando com os recortes em `templates/`. Eles foram capturados em ~1024x768 e são redimensionados automaticamente para outras resoluções (800x600 até 1920x1080).
+O bot identifica as telas comparando com os recortes em `templates/`. Eles foram capturados em ~1024x768, mas funcionam em qualquer resolução do jogo (800x600 até 1920x1080) sem precisar redimensionar — a interface do Talisman é desenhada em tamanho fixo (em pixels), independente da resolução escolhida; só a quantidade de cenário ao redor muda.
 
 Se o jogo atualizar a interface, ou se o seu servidor tiver um visual diferente, algum template pode parar de bater — o log vai avisar que não reconheceu a tela. Nesse caso, tire um print da janela do jogo, recorte o pedaço equivalente e substitua o arquivo em `templates/`. O `config.json` lista o que cada um representa.
 

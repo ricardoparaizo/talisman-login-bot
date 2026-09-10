@@ -26,6 +26,28 @@ from pathlib import Path
 
 APP_FOLDER_NAME = "Bot Login - Talisman Online"
 
+if sys.platform == "win32":
+    # Sem isso, o processo roda "DPI-unaware": o Windows escala as
+    # coordenadas de janela que APIs como GetClientRect devolvem pelo fator
+    # de escala do monitor (100%/125%/150%/etc), enquanto a captura de tela
+    # (PrintWindow, ou o screenshot do pyautogui) continua em pixels
+    # FISICOS. As duas coisas ficando fora de sincronia bagunça o calculo de
+    # escala em compute_scale() (screen_match.py) de um jeito que depende do
+    # DPI do Windows, nao so da resolucao escolhida no jogo -- foi
+    # exatamente isso que fez o bot reconhecer as telas numa resolucao do
+    # jogo e falhar nas outras. Roda aqui (importado antes de qualquer
+    # captura, nos dois modos "background" e "foreground") pra garantir que
+    # so aconteça uma vez, o mais cedo possivel.
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except OSError:
+            pass
+
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
