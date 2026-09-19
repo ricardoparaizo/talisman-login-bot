@@ -294,6 +294,23 @@ class Bot:
         self.last_state_logged = None
         self.last_scale = None
         self.scaled_templates = {}
+        # Onde cada campo de login fica DENTRO da caixa de login (cache).
+        # Veja _offset_no_dialogo/find_campo_de_login.
+        self._offsets_no_dialogo = {}
+        # Limpeza dos campos ANTES de digitar. Diferente do
+        # clear_field_presses antigo (que mandava 64 teclas as cegas em
+        # todo campo), essa limpeza manda poucas teclas por vez e CONFERE
+        # na tela se o campo ja esvaziou, parando assim que esvaziar --
+        # normalmente 1 rodada resolve, e campo ja vazio nao gasta tecla
+        # nenhuma.
+        self.limpar_campos_antes_de_digitar = bool(
+            cfg.get("limpar_campos_antes_de_digitar", True)
+        )
+        self.limpeza_teclas_por_rodada = int(cfg.get("limpeza_teclas_por_rodada", 24))
+        self.limpeza_max_rodadas = int(cfg.get("limpeza_max_rodadas", 3))
+        # Acima disso, o pedaco da tela e considerado igual ao campo vazio.
+        # Vazio da ~1.00; com qualquer texto cai pra ~0.74.
+        self.campo_vazio_confidence = float(cfg.get("campo_vazio_confidence", 0.97))
 
         # contexto do ciclo atual (preenchido em refresh_frame)
         self.region = None       # so usado no modo "foreground"
@@ -400,6 +417,77 @@ class Bot:
             return None
         return match_template(self.screen_bgr, self.scaled_templates[name], self.confidence)
 
+    def _offset_no_dialogo(self, name):
+        """Onde o campo `name` fica DENTRO do template login_dialog, em
+        pixels (dx, dy, w, h) a partir do canto do dialogo.
+
+        Calculado uma vez e guardado em cache. Os dois campos (conta e
+        senha) sao recortes do proprio login_dialog, entao isso bate
+        exatamente -- e da pra conferir o score pra nao confiar num
+        offset ruim se algum template for trocado no futuro."""
+        if name in self._offsets_no_dialogo:
+            return self._offsets_no_dialogo[name]
+
+        import cv2
+
+        resultado = None
+        dialogo = self.raw_templates.get("login_dialog")
+        campo = self.raw_templates.get(name)
+        if dialogo is not None and campo is not None:
+            th, tw = campo.shape[:2]
+            dh, dw = dialogo.shape[:2]
+            if th <= dh and tw <= dw:
+                res = cv2.matchTemplate(dialogo, campo, cv2.TM_CCOEFF_NORMED)
+                _, score, _, loc = cv2.minMaxLoc(res)
+                # Exige um casamento praticamente perfeito: o campo tem que
+                # ser mesmo um recorte do dialogo. Um score baixo aqui
+                # significa que os templates nao combinam mais entre si, e
+                # ai e mais seguro cair no metodo antigo do que clicar num
+                # lugar calculado errado.
+                if score >= 0.97:
+                    resultado = (loc[0], loc[1], tw, th)
+                else:
+                    self.log.warning(
+                        "O template '%s' nao parece ser um recorte de 'login_dialog' "
+                        "(semelhanca %.2f). Vou procurar esse campo pela tela inteira, "
+                        "como antes -- vale reconferir esses templates.",
+                        name, score,
+                    )
+
+        self._offsets_no_dialogo[name] = resultado
+        return resultado
+
+    def find_campo_de_login(self, name):
+        """Acha o campo de conta/senha ANCORADO na caixa de login.
+
+        Por que nao procurar o campo direto pela tela (self.find):
+            Os dois campos sao retangulos escuros vazios praticamente
+            iguais -- um casa no lugar do outro com ~0.93 de semelhanca,
+            bem acima do `confidence` de 0.85. Enquanto os dois estao
+            vazios o lugar certo ainda ganha (1.00), mas assim que um
+            deles fica PREENCHIDO (exatamente o que acontece depois das
+            primeiras tentativas de login), o campo ja digitado deixa de
+            bater consigo mesmo e o melhor casamento passa a ser o OUTRO
+            campo, ainda vazio. Era isso que fazia o bot digitar a conta
+            (e depois a senha) no campo errado depois de algumas
+            tentativas.
+
+            A caixa de login inteira, ao contrario, e grande e sem
+            ambiguidade nenhuma -- entao achamos ELA e derivamos a posicao
+            dos campos pelo deslocamento fixo que eles tem la dentro, que
+            nao muda nunca."""
+        dialogo = self.find("login_dialog")
+        if not dialogo:
+            return None
+        offset = self._offset_no_dialogo(name)
+        if offset is None:
+            return None
+        dx, dy, w, h = offset
+        escala = self.last_scale or 1.0
+        if abs(escala - 1.0) >= 0.02:
+            dx, dy = int(round(dx * escala)), int(round(dy * escala))
+        return (dialogo[0] + dx, dialogo[1] + dy, w, h)
+
     def click(self, name, label=None):
         box = self.find(name)
         if not box:
@@ -470,17 +558,110 @@ class Bot:
                 self._logins_sem_progresso,
             )
 
-    def type_into(self, name, text):
-        box = self.find(name)
+    def _pode_usar_direto(self, cx, cy):
+        """True se o campo em (cx, cy) for um controle de texto de verdade
+        do Windows -- nesse caso o WM_SETTEXT substitui o conteudo inteiro
+        sozinho e nao faz sentido gastar teclas limpando antes."""
+        if not self.direct_field_fill or self.hwnd is None:
+            return False
+        try:
+            return self._win_input._edit_control_at(self.hwnd, cx, cy) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _campo_esta_vazio(self, name, box):
+        """Olha na tela se o campo em `box` esta VAZIO, comparando o pedaco
+        da tela com o template do campo vazio (que e exatamente isso: um
+        recorte do campo sem texto nenhum).
+
+        Vazio da ~1.00 de semelhanca; com qualquer texto digitado cai pra
+        ~0.74 -- entao da pra separar os dois com folga. Retorna None se
+        nao der pra saber (sem template/tela), pra quem chama nao tomar
+        decisao baseada em palpite."""
+        import cv2
+
+        modelo = self.scaled_templates.get(name)
+        if modelo is None or self.screen_bgr is None or not box:
+            return None
+        x, y, w, h = box
+        th, tw = modelo.shape[:2]
+        sh, sw = self.screen_bgr.shape[:2]
+        if x < 0 or y < 0 or x + tw > sw or y + th > sh:
+            return None
+        pedaco = self.screen_bgr[y:y + th, x:x + tw]
+        if pedaco.shape != modelo.shape:
+            return None
+        score = cv2.matchTemplate(pedaco, modelo, cv2.TM_CCOEFF_NORMED).max()
+        # bool() explicito: a comparacao devolve numpy.bool_, e
+        # `numpy.bool_(True) is True` da False -- o que faria os testes
+        # `is True` de quem chama falharem mesmo com o campo vazio.
+        return bool(score >= self.campo_vazio_confidence)
+
+    def _limpar_campo_ate_esvaziar(self, name, box):
+        """Limpa o campo mandando rodadas CURTAS de teclas e CONFERINDO na
+        tela, entre uma rodada e outra, se ele ja esvaziou.
+
+        Por que nao mandar as 64 teclas de uma vez (jeito antigo): sao
+        teclas sinteticas demais, e e justamente isso que faz o jogo
+        re-injetar teclado de verdade no Windows -- o "texto aleatorio"
+        que aparecia nas outras janelas. Aqui a gente manda o minimo
+        necessario e para assim que o campo fica vazio de fato.
+
+        Retorna True se terminou com o campo comprovadamente vazio."""
+        if self._campo_esta_vazio(name, box) is True:
+            return True  # ja estava vazio -- nenhuma tecla enviada
+
+        x, y, w, h = box
+        cx, cy = x + w // 2, y + h // 2
+        for tentativa in range(self.limpeza_max_rodadas):
+            self._win_input.click_in_window(self.hwnd, cx, cy)
+            time.sleep(0.12)
+            self._win_input.clear_field_round(self.hwnd, self.limpeza_teclas_por_rodada)
+            time.sleep(0.12)
+            self.refresh_frame()
+            if self.screen_bgr is None:
+                return False
+            vazio = self._campo_esta_vazio(name, box)
+            if vazio is True:
+                if tentativa > 0:
+                    self.log.debug("Campo '%s' limpo em %d rodadas.", name, tentativa + 1)
+                return True
+            if vazio is None:
+                return False
+        self.log.warning(
+            "Nao consegui esvaziar o campo '%s' depois de %d rodadas de limpeza -- "
+            "vou digitar assim mesmo (o texto pode sair grudado).",
+            name, self.limpeza_max_rodadas,
+        )
+        return False
+
+    def type_into(self, name, text, box=None):
+        """Digita `text` no campo `name`. `box` permite passar a posicao ja
+        calculada por fora (usado pelos campos de conta/senha, que sao
+        localizados pela caixa de login e nao por busca direta)."""
+        if box is None:
+            box = self.find(name)
         if not box:
             return False
         x, y, w, h = box
         cx, cy = x + w // 2, y + h // 2
 
         if self.mode == "background":
+            # Limpa ANTES de digitar, conferindo na tela -- sem isso o
+            # texto novo gruda no que ja estava la (era o
+            # nome da conta saindo duplicado, tipo "contacontax", quando
+            # o bot refazia o login). So vale pro caminho de teclado: o
+            # WM_SETTEXT
+            # (direto) ja substitui o conteudo inteiro sozinho.
+            limpou_antes = False
+            if self.limpar_campos_antes_de_digitar and not self._pode_usar_direto(cx, cy):
+                limpou_antes = self._limpar_campo_ate_esvaziar(name, box)
+
             metodo = self._win_input.type_into_field(
                 self.hwnd, cx, cy, text,
-                clear_presses=self._presses_de_limpeza(),
+                # Se a limpeza verificada ja esvaziou o campo, nao manda
+                # mais nenhuma tecla de limpeza as cegas por cima.
+                clear_presses=0 if limpou_antes else self._presses_de_limpeza(),
                 allow_direct=self.direct_field_fill,
             )
             if metodo != self._fill_method_logged:
@@ -795,8 +976,20 @@ class Bot:
         if self.find("login_dialog"):
             self.note_state("login_dialog", "Tela de login.")
             if self.account and self.password:
-                typed_account = self.type_into("account_field", self.account)
-                typed_password = self.type_into("password_field", self.password)
+                # Posicao dos dois campos derivada da caixa de login (nao
+                # procurada campo a campo pela tela) -- veja
+                # find_campo_de_login: os campos sao parecidos demais entre
+                # si e, com um deles ja preenchido, a busca direta casava um
+                # no lugar do outro e trocava conta com senha.
+                box_conta = self.find_campo_de_login("account_field")
+                box_senha = self.find_campo_de_login("password_field")
+                if box_conta is None and box_senha is None:
+                    # Sem a ancora (templates incompativeis entre si), volta
+                    # pro jeito antigo pra nao deixar de logar.
+                    box_conta = self.find("account_field")
+                    box_senha = self.find("password_field")
+                typed_account = self.type_into("account_field", self.account, box=box_conta)
+                typed_password = self.type_into("password_field", self.password, box=box_senha)
                 if typed_account or typed_password:
                     self.log.info("Conta e senha digitadas.")
                     self._contar_tentativa_de_login()
