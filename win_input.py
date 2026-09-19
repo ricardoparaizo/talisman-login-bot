@@ -312,6 +312,24 @@ def clear_field(hwnd, max_presses=32):
             return
 
 
+def clear_field_round(hwnd, presses):
+    """Manda UMA rodada curta de limpeza: um End (leva o cursor pro fim do
+    texto) seguido de `presses` Backspace. Quem chama confere na tela se o
+    campo ficou vazio e decide se manda outra rodada -- assim nao
+    precisamos martelar dezenas de teclas as cegas, que e o que fazia o
+    jogo re-injetar teclado de verdade no Windows (o "texto aleatorio"
+    aparecendo em outras janelas).
+
+    O End vem antes porque o clique pode ter deixado o cursor no MEIO do
+    texto -- nesse caso so Backspace apagaria a metade da esquerda."""
+    if presses <= 0:
+        return
+    _key_tap(hwnd, win32con.VK_END)
+    for _ in range(presses):
+        if not _key_tap(hwnd, win32con.VK_BACK):
+            return
+
+
 def type_text(hwnd, text, delay=0.02):
     for ch in text:
         try:
