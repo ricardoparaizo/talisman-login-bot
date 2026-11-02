@@ -311,6 +311,13 @@ class Bot:
         # Acima disso, o pedaco da tela e considerado igual ao campo vazio.
         # Vazio da ~1.00; com qualquer texto cai pra ~0.74.
         self.campo_vazio_confidence = float(cfg.get("campo_vazio_confidence", 0.97))
+        # Quantas colunas de pixel podem diferir do campo vazio e ele ainda
+        # contar como vazio -- e o espaco do cursor de texto piscando. Veja
+        # _campo_esta_vazio.
+        self.campo_vazio_max_colunas = int(cfg.get("campo_vazio_max_colunas", 3))
+        # Salva os recortes do campo (uma vez por sessao) quando a limpeza
+        # nao consegue confirmar que esvaziou -- pra dar pra ver o porque.
+        self._diagnostico_limpeza_salvo = False
 
         # contexto do ciclo atual (preenchido em refresh_frame)
         self.region = None       # so usado no modo "foreground"
@@ -577,27 +584,74 @@ class Bot:
         Vazio da ~1.00 de semelhanca; com qualquer texto digitado cai pra
         ~0.74 -- entao da pra separar os dois com folga. Retorna None se
         nao der pra saber (sem template/tela), pra quem chama nao tomar
-        decisao baseada em palpite."""
-        import cv2
+        decisao baseada em palpite.
 
-        modelo = self.scaled_templates.get(name)
-        if modelo is None or self.screen_bgr is None or not box:
-            return None
-        x, y, w, h = box
-        th, tw = modelo.shape[:2]
-        sh, sw = self.screen_bgr.shape[:2]
-        if x < 0 or y < 0 or x + tw > sw or y + th > sh:
-            return None
-        pedaco = self.screen_bgr[y:y + th, x:x + tw]
-        if pedaco.shape != modelo.shape:
+        O cursor de texto: depois do clique o campo fica em foco e mostra
+        o cursor piscando. So essa linha de 1px ja derruba a semelhanca pra
+        ~0.955, abaixo do limite -- e o bot nunca conseguia confirmar que
+        o campo esvaziou, mandando as 3 rodadas de Backspace inteiras em
+        TODO login (o log mostrava isso em praticamente toda tentativa).
+        Por isso, quando a semelhanca nao basta, contamos QUANTAS colunas
+        de pixel diferem do campo vazio: o cursor ocupa 1-2 colunas, texto
+        de verdade (mesmo a senha em asteriscos) ocupa dezenas."""
+        import cv2
+        import numpy as np
+
+        pedaco, modelo = self._recorte_do_campo(name, box)
+        if pedaco is None:
             return None
         score = cv2.matchTemplate(pedaco, modelo, cv2.TM_CCOEFF_NORMED).max()
         # bool() explicito: a comparacao devolve numpy.bool_, e
         # `numpy.bool_(True) is True` da False -- o que faria os testes
         # `is True` de quem chama falharem mesmo com o campo vazio.
-        return bool(score >= self.campo_vazio_confidence)
+        if score >= self.campo_vazio_confidence:
+            return True
+        diff = cv2.absdiff(
+            cv2.cvtColor(pedaco, cv2.COLOR_BGR2GRAY), cv2.cvtColor(modelo, cv2.COLOR_BGR2GRAY)
+        )
+        colunas_diferentes = int(np.count_nonzero(diff.max(axis=0) > 40))
+        return bool(colunas_diferentes <= self.campo_vazio_max_colunas)
 
-    def _limpar_campo_ate_esvaziar(self, name, box):
+    def _recorte_do_campo(self, name, box):
+        """(pedaco da tela onde o campo esta, template do campo vazio), ou
+        (None, None) se nao der pra recortar."""
+        modelo = self.scaled_templates.get(name)
+        if modelo is None or self.screen_bgr is None or not box:
+            return None, None
+        x, y, w, h = box
+        th, tw = modelo.shape[:2]
+        sh, sw = self.screen_bgr.shape[:2]
+        if x < 0 or y < 0 or x + tw > sw or y + th > sh:
+            return None, None
+        pedaco = self.screen_bgr[y:y + th, x:x + tw]
+        if pedaco.shape != modelo.shape:
+            return None, None
+        return pedaco, modelo
+
+    def _salvar_diagnostico_limpeza(self, name, box):
+        """Guarda o recorte do campo que nao quis esvaziar (e o template do
+        campo vazio, pra comparar) em Documentos/.../diagnostico. So uma vez
+        por sessao. A senha aparece em asteriscos na tela, entao o recorte
+        nao a expoe."""
+        if self._diagnostico_limpeza_salvo:
+            return
+        self._diagnostico_limpeza_salvo = True
+        import cv2
+
+        pedaco, modelo = self._recorte_do_campo(name, box)
+        if pedaco is None:
+            return
+        pasta = USER_DATA_DIR / "diagnostico"
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+            carimbo = time.strftime("%Y%m%d-%H%M%S")
+            cv2.imwrite(str(pasta / f"{carimbo}_{name}_tela.png"), pedaco)
+            cv2.imwrite(str(pasta / f"{carimbo}_{name}_vazio.png"), modelo)
+            self.log.info("Recorte do campo salvo pra analise em: %s", pasta)
+        except Exception as exc:  # noqa: BLE001 - diagnostico nunca deve parar o bot
+            self.log.debug("Nao consegui salvar o diagnostico da limpeza: %s", exc)
+
+    def _limpar_campo_ate_esvaziar(self, name, box, text=""):
         """Limpa o campo mandando rodadas CURTAS de teclas e CONFERINDO na
         tela, entre uma rodada e outra, se ele ja esvaziou.
 
@@ -611,12 +665,22 @@ class Bot:
         if self._campo_esta_vazio(name, box) is True:
             return True  # ja estava vazio -- nenhuma tecla enviada
 
+        # O que sobra no campo quase sempre e o MESMO texto que o bot
+        # digitou na tentativa anterior (ou a conta que o jogo lembra) --
+        # entao o tamanho dele com uma folga basta pra primeira rodada, sem
+        # gastar as 24 teclas cheias. Se nao bastar, a rodada seguinte pega
+        # o resto.
+        teclas = self.limpeza_teclas_por_rodada
+        if text:
+            teclas = min(teclas, len(text) + 4)
+
         x, y, w, h = box
         cx, cy = x + w // 2, y + h // 2
         for tentativa in range(self.limpeza_max_rodadas):
             self._win_input.click_in_window(self.hwnd, cx, cy)
             time.sleep(0.12)
-            self._win_input.clear_field_round(self.hwnd, self.limpeza_teclas_por_rodada)
+            self._win_input.clear_field_round(self.hwnd, teclas)
+            teclas = self.limpeza_teclas_por_rodada
             time.sleep(0.12)
             self.refresh_frame()
             if self.screen_bgr is None:
@@ -628,6 +692,7 @@ class Bot:
                 return True
             if vazio is None:
                 return False
+        self._salvar_diagnostico_limpeza(name, box)
         self.log.warning(
             "Nao consegui esvaziar o campo '%s' depois de %d rodadas de limpeza -- "
             "vou digitar assim mesmo (o texto pode sair grudado).",
@@ -655,7 +720,7 @@ class Bot:
             # (direto) ja substitui o conteudo inteiro sozinho.
             limpou_antes = False
             if self.limpar_campos_antes_de_digitar and not self._pode_usar_direto(cx, cy):
-                limpou_antes = self._limpar_campo_ate_esvaziar(name, box)
+                limpou_antes = self._limpar_campo_ate_esvaziar(name, box, text)
 
             metodo = self._win_input.type_into_field(
                 self.hwnd, cx, cy, text,
