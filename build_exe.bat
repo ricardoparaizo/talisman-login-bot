@@ -45,6 +45,7 @@ python -m PyInstaller --onefile --noupx --windowed --noconfirm --name TalismanLo
     --icon=icon.ico ^
     --version-file=version_info.txt ^
     --add-data "templates;templates" ^
+    --add-data "assets;assets" ^
     --add-data "config.json;." ^
     --add-data "icon.png;." ^
     --add-data "icon.ico;." ^

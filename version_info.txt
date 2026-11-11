@@ -11,8 +11,8 @@
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 1, 0, 0),
+    prodvers=(1, 1, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -27,13 +27,13 @@ VSVersionInfo(
           '041604B0',
           [StringStruct('CompanyName', 'The Simitar Beast'),
            StringStruct('FileDescription', 'Talisman Online - Login Bot'),
-           StringStruct('FileVersion', '1.0.0.0'),
+           StringStruct('FileVersion', '1.1.0.0'),
            StringStruct('InternalName', 'TalismanLoginBot'),
            StringStruct('LegalCopyright', 'The Simitar Beast'),
            StringStruct('OriginalFilename', 'TalismanLoginBot.exe'),
            StringStruct('ProductName', 'Talisman Online - Login Bot'),
-           StringStruct('ProductVersion', '1.0.0.0'),
-           StringStruct('Comments', 'Automatiza o login no Talisman Online. Nao envia dados para lugar nenhum.')])
+           StringStruct('ProductVersion', '1.1.0.0'),
+           StringStruct('Comments', 'Automatiza o login e a entrada em caves no Talisman Online. Nao envia dados para lugar nenhum.')])
       ]),
     VarFileInfo([VarStruct('Translation', [1046, 1200])])
   ]

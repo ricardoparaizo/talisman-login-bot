@@ -1,34 +1,27 @@
 """
-Interface grafica do bot, feita com CustomTkinter (biblioteca pura em
-Python, MIT, sem dependencias pesadas -- so um wrapper sobre o Tkinter que
-ja vem com o Python, entao continua simples/baixo risco pro antivirus).
+Interface grafica do bot, no estilo Apple TV / design system da Apple (HIG).
 
-Visual: cartoes roxo-escuros flutuando sobre um gradiente roxo
-suave, com roxo/violeta como unico destaque e botoes em pilula. As cores
-vivem no skin.py; aqui ficam so o layout e o comportamento.
+Tudo e desenhado num tk.Canvas pelo ui_kit.py: o fundo (arte desfocada com
+paineis de vidro de verdade) e uma imagem, e os componentes por cima sao
+imagens com transparencia + textos do canvas -- por isso o vidro e
+translucido de fato. Os campos de digitacao e o registro sao widgets do Tk
+encaixados no canvas, com a cor do vidro exatamente onde ficam. As cores e
+parametros do vidro vivem no skin.py.
 
-Sobre o fundo: CustomTkinter desenha tudo opaco, entao nao da pra ter
-transparencia/desfoque de verdade (as APIs do Windows pra isso --
-pywinstyles "acrylic"/"mica", DwmEnableBlurBehindWindow -- ja foram
-tentadas e nao funcionaram). O gradiente fica numa imagem gerada pelo Pillow
-(skin.canvas_image), atras de tudo, e aparece no respiro em volta dos dois
-cartoes. Ela e redesenhada quando a janela muda de tamanho.
+Layout:
+    - Barra lateral (esquerda): nome do app e a lista de contas (cartoes de
+      vidro). Clique simples SELECIONA a conta; o interruptor de cada cartao
+      liga/desliga o login dela; duplo clique inicia o login na hora; botao
+      direito abre o menu (iniciar/parar, editar, remover). Embaixo, "Iniciar
+      Login" (da conta selecionada) e "+ Nova conta".
+    - Area principal (direita), com abas (controle segmentado):
+        Contas       -- formulario da conta (login, senha, servidor, nick) e
+                        a pasta do jogo.
+        Entrar Cave  -- entra na cave escolhida com a conta selecionada,
+                        repetindo o pedido ate conseguir (ver cave.py).
+      Embaixo das duas, o registro (log).
 
-Layout em barra lateral + painel de detalhes:
-
-    - Barra lateral (esquerda): nome do app no topo e a lista de contas
-      cadastradas, cada uma num cartaozinho, com uma
-      caixinha de selecao por conta (pra multi-login) e duplo clique na
-      linha pra iniciar so aquela conta na hora. Editar uma conta ja
-      cadastrada so acontece pelo botao direito -> "Editar".
-    - Painel de detalhes (direita): formulario unico da conta -- login,
-      senha, servidor, nick e a pasta onde o jogo esta instalado. Fica
-      sempre pronto pra cadastrar uma conta nova; so muda pra mostrar os
-      dados de uma conta existente quando voce entra no modo edicao.
-    - Log: por baixo de tudo, com cores por nivel (erro/aviso/info).
-
-Rodar "python bot.py" (ou dar duplo clique no .exe) sem nenhum argumento
-abre esta tela.
+A versao anterior (CustomTkinter, vidro simulado) esta em gui_ctk.py.
 """
 
 import logging
@@ -37,15 +30,14 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-import customtkinter as ctk
-
 import bot
 import profiles
 import skin
+import ui_kit
 from paths import RESOURCE_DIR, USER_DATA_DIR
 
 APP_NAME = "Bot Login - Talisman Online"
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.1"
 APP_AUTHOR = "TheSimitarBeast"
 APP_URL = "https://github.com/ricardoparaizo/talisman-login-bot"
 
@@ -53,9 +45,12 @@ NEW_ACCOUNT_HINT = (
     "Preencha os campos abaixo para adicionar uma conta ao bot. Seus dados ficam salvos apenas "
     "localmente na pasta Documentos do seu computador."
 )
+CAVE_HINT = (
+    "Selecione uma conta online na lista da esquerda, escolha a cave e clique em Entrar. Com o "
+    "personagem perto do NPC da cave, o bot repete o pedido de entrar ate conseguir. O jogo nao "
+    "pode estar minimizado."
+)
 
-# Os icones viajam dentro do .exe (RESOURCE_DIR); rodando pelo codigo,
-# RESOURCE_DIR e a propria pasta do projeto, entao serve pros dois casos.
 ICON_ICO = RESOURCE_DIR / "icon.ico"
 ICON_PNG = RESOURCE_DIR / "icon.png"
 
@@ -67,57 +62,23 @@ KNOWN_SERVERS = [
     "Light in the Darkness",
 ]
 
-# ---------------------------------------------------------------- paleta ----
-# As cores vivem no skin.py. Os apelidos abaixo existem pra o resto deste
-# arquivo continuar lendo do mesmo jeito de antes -- so o que eles APONTAM
-# mudou.
-BG = skin.BG_APP           # fundo do conteudo
-BG_SIDEBAR = skin.BG_SIDEBAR
-SURFACE = skin.BG_PANEL    # painel do log
-SURFACE_ALT = skin.BG_SUNKEN   # campos de texto (afundados)
-SURFACE_HOVER = skin.BG_ROW_HOVER
-ROW_HOVER = skin.BG_ROW_HOVER
-ROW_SELECTED = skin.BG_ROW_SEL
-BORDER = skin.EDGE
-BORDER_STRONG = skin.EDGE_STRONG
-BORDER_FOCUS = skin.ACCENT_BRIGHT   # campo em foco ganha o roxo de destaque
+# Rotulo -> (pausa entre voltas em segundos, pedidos por volta). A interface
+# do jogo passa pelo gancho ~3x por segundo (medido), entao o que mais
+# acelera e mandar varios pedidos por volta.
+CAVE_VELOCIDADES = [
+    ("Maximo (~30 por segundo)", 0.0, 10),
+    ("Muito rapido (~15 por segundo)", 0.0, 5),
+    ("Rapido (~6 por segundo)", 0.0, 2),
+    ("Normal (~3 por segundo)", 0.0, 1),
+]
 
-WHITE = skin.TEXT
-TEXT = skin.TEXT
-TEXT_SECOND = skin.TEXT_SOFT
-TEXT_MUTED = skin.TEXT_MUTED
-TEXT_DIM = skin.TEXT_DIM
-
-DOT_IDLE = skin.TEXT_DIM   # bolinha "parado"
-DOT_RUNNING = skin.OK      # bolinha "rodando"
-
-DANGER = skin.DANGER       # acao destrutiva + erro no log
-WARNING = skin.WARNING     # aviso no log
-LABEL = skin.TEXT_MUTED    # rotulos de campo e titulos de secao
-
-FONT_FAMILY = skin.FONT
-FONT_MONO_FAMILY = skin.FONT_MONO
-
-
-# Espaco em volta dos dois cartoes (MARGEM) e entre eles (VAO) -- e por
-# onde o gradiente do fundo aparece, entao nao da pra ser muito apertado.
-MARGEM = 34
-VAO = 28
-
-
-def _font(size, weight="normal", family=FONT_FAMILY, slant="roman", underline=False):
-    return ctk.CTkFont(family=family, size=size, weight=weight, slant=slant, underline=underline)
-
-
-def _tracked(text):
-    """Espacamento entre letras -- ver skin.tracked()."""
-    return skin.tracked(text)
+TABS = ["Contas", "Entrar Cave"]
 
 
 class QueueLogHandler(logging.Handler):
     """Manda cada linha de log pra uma Queue, pra thread da interface poder
-    ler e mostrar na tela sem travar (Tkinter/CTk so pode ser tocado pela
-    thread principal)."""
+    ler e mostrar na tela sem travar (o Tk so pode ser tocado pela thread
+    principal)."""
 
     def __init__(self, log_queue):
         super().__init__()
@@ -127,227 +88,19 @@ class QueueLogHandler(logging.Handler):
         self.log_queue.put((record.levelname, self.format(record)))
 
 
-# --------------------------------------------------------------- botoes ----
-# Tres pesos, sempre os mesmos, pra a tela ter hierarquia em vez de uma
-# fileira de botoes todos gritando igual. `bg`/`hover_bg`/`color` continuam
-# aceitos por compatibilidade com quem chama (a versao anterior, em Canvas,
-# precisava saber o fundo ao redor pra nao deixar um retangulo destoando) --
-# o CTkButton nao precisa mais disso, entao esses parametros sao ignorados.
-
-
-def primary_button(master, text, command, width=120, bg=None):
-    """Acao principal: pilula branca com texto escuro. So uma por area da
-    tela -- num tema escuro, branco e o que mais chama atencao."""
-    return ctk.CTkButton(
-        master, text=text, command=command, width=width, height=36,
-        corner_radius=skin.RADIUS_PILL, fg_color=skin.BTN_PRIMARY,
-        hover_color=skin.BTN_PRIMARY_HOVER, text_color=skin.BTN_PRIMARY_TEXT,
-        font=_font(12, "bold"), border_width=0,
-    )
-
-
-def ghost_button(master, text, command, width=120, height=36, bg=None):
-    """Acao secundaria: pilula escura com contorno sutil."""
-    return ctk.CTkButton(
-        master, text=text, command=command, width=width, height=height,
-        corner_radius=skin.RADIUS_PILL, fg_color=skin.BTN_BG,
-        hover_color=skin.BTN_HOVER, text_color=TEXT,
-        border_width=1, border_color=BORDER_STRONG, font=_font(11),
-    )
-
-
-def text_button(master, text, command, width=90, height=24, color=None, hover_bg=None, bg=None):
-    """Acao terciaria: so texto, com um leve realce em pilula no hover."""
-    return ctk.CTkButton(
-        master, text=text, command=command, width=width, height=height,
-        corner_radius=skin.RADIUS_PILL, fg_color="transparent",
-        hover_color=skin.BG_ROW_HOVER, text_color=color or TEXT_MUTED,
-        font=_font(10), border_width=0,
-    )
-
-
-def hairline(master, color=None, bg=None):
-    """Separador em dois tons -- ver skin.Divider."""
-    return skin.Divider(master, bg=bg or SURFACE)
-
-
-def load_app_image(size):
-    """Carrega o icone do app pra mostrar DENTRO da janela, no tamanho
-    pedido. Se o arquivo nao estiver do lado do programa (ou o Pillow
-    faltar), retorna None -- a interface continua funcionando sem a
-    imagem, so sem o simbolo."""
-    try:
-        from PIL import Image
-
-        if not ICON_PNG.exists():
-            return None
-        img = Image.open(ICON_PNG)
-        return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
-    except Exception:  # noqa: BLE001 - detalhe visual, nunca deve impedir o app de abrir
-        return None
-
-
-class AccountRow(ctk.CTkFrame):
-    """Uma linha da lista de contas, na barra lateral: barra indicadora de
-    selecao + caixinha (multi-login) + nome/servidor/personagem + bolinha
-    de status. Duplo clique inicia so aquela conta na hora; botao direito
-    abre o menu (editar/remover/iniciar-parar). Um clique simples na linha
-    nao faz nada de proposito -- editar uma conta so acontece pelo menu de
-    botao direito.
-
-    Nao existe conceito de "conta ativa" aqui: quem decide quais contas
-    logam e o usuario, marcando a caixinha (ou Iniciar todas) de cada vez --
-    de proposito, pra nao ter uma conta "padrao" implicita rodando sem voce
-    escolher."""
-
-    def __init__(self, master, app, account, server, character, is_running):
-        super().__init__(
-            master, fg_color=skin.BG_CARD, corner_radius=skin.RADIUS_MD,
-            border_width=1, border_color=skin.EDGE,
-        )
-        self.app = app
-        self.account = account
-        self.selected = False
-        self.hovered = False
-        # Conta rodando vira o "cartao roxo" -- o destaque da tela. A linha
-        # e recriada a cada mudanca de estado (_refresh_profile_list), entao
-        # basta decidir isso aqui.
-        self.running = is_running
-        self.grid_columnconfigure(2, weight=1)
-
-        # A caixinha e o liga/desliga da conta: marcar JA inicia o login,
-        # desmarcar para. Ela nasce refletindo o estado real (marcada se a
-        # conta ja estiver rodando).
-        #
-        # Cuidado: o `command` do CTkCheckBox so dispara em clique de
-        # verdade (toggle) -- marcar por codigo com set()/select() nao
-        # chama nada. E por isso que da pra sincronizar a caixinha com o
-        # estado real sem entrar em loop de "marcou -> inicia -> marcou".
-        self.check_var = tk.BooleanVar(value=is_running)
-        self.checkbox = ctk.CTkCheckBox(
-            self,
-            text="",
-            variable=self.check_var,
-            command=self._on_toggle,
-            width=18,
-            checkbox_width=15,
-            checkbox_height=15,
-            corner_radius=4,
-            border_width=1,
-            # no cartao roxo (rodando), a caixinha marcada fica branca --
-            # roxo sobre roxo sumiria
-            fg_color=skin.BTN_PRIMARY if is_running else skin.ACCENT,
-            hover_color=skin.BTN_PRIMARY_HOVER if is_running else skin.ACCENT_BRIGHT,
-            checkmark_color=skin.CARD_ACTIVE if is_running else skin.TEXT,
-            border_color=skin.TEXT_SOFT if is_running else skin.ACCENT_SOFT,
-        )
-        self.checkbox.grid(row=0, column=1, rowspan=2, padx=(14, 10), pady=10)
-
-        self.name_label = ctk.CTkLabel(
-            self, text=account, font=_font(13, "bold"), text_color=TEXT, anchor="w", height=20
-        )
-        self.name_label.grid(row=0, column=2, sticky="we", padx=(0, 8), pady=(10, 0))
-
-        subtitle = " · ".join(part for part in (server, character) if part) or "sem servidor/personagem"
-        self.subtitle_label = ctk.CTkLabel(
-            self, text=subtitle, font=_font(10), text_color=TEXT_MUTED, anchor="w", height=16
-        )
-        self.subtitle_label.grid(row=1, column=2, columnspan=2, sticky="we", padx=(0, 12), pady=(0, 10))
-
-        # Pilula de status ("● rodando" / "● parado"), como o "Analyzing"
-        # dos cards da referencia: bolinha colorida + texto discreto, no
-        # canto de cima -- assim o subtitulo embaixo tem a largura toda.
-        self.status_pill = ctk.CTkFrame(self, corner_radius=skin.RADIUS_PILL, height=22)
-        self.status_pill.grid(row=0, column=3, sticky="e", padx=(0, 10), pady=(9, 0))
-        self.status_dot = ctk.CTkLabel(
-            self.status_pill, text="●", font=_font(9), width=8, height=20,
-            text_color=DOT_RUNNING if is_running else DOT_IDLE,
-        )
-        self.status_dot.pack(side="left", padx=(9, 4))
-        self.status_text = ctk.CTkLabel(
-            self.status_pill, text="rodando" if is_running else "parado",
-            font=_font(10), height=20, text_color=TEXT if is_running else TEXT_MUTED,
-        )
-        self.status_text.pack(side="left", padx=(0, 10))
-
-        # Sem clique simples aqui de proposito: a UNICA forma de abrir uma
-        # conta pra edicao e o botao direito -> "Editar" (ver
-        # App._show_row_menu / App._start_edit). Um clique simples na linha
-        # nao deve mudar o formulario.
-        for widget in (
-            self, self.name_label, self.subtitle_label,
-            self.status_pill, self.status_dot, self.status_text,
-        ):
-            widget.bind("<Double-Button-1>", self._on_double_click)
-            widget.bind("<Button-3>", self._on_right_click)
-            widget.bind("<Enter>", self._on_enter)
-            widget.bind("<Leave>", self._on_leave)
-
-        self._apply_style()
-
-    def _on_toggle(self):
-        self.app._on_account_toggled(self.account, bool(self.check_var.get()))
-
-    def _on_right_click(self, event):
-        self.app._show_row_menu(self.account, event)
-
-    def _on_double_click(self, _event=None):
-        self.app._quick_start_account(self.account)
-
-    def _on_enter(self, _event=None):
-        self.hovered = True
-        self._apply_style()
-
-    def _on_leave(self, _event=None):
-        self.hovered = False
-        self._apply_style()
-
-    def set_selected(self, selected):
-        """A linha aberta no formulario ganha um fundo um pouco mais claro
-        e um contorno mais visivel."""
-        self.selected = selected
-        self._apply_style()
-
-    def _apply_style(self):
-        if self.running:
-            fundo = skin.CARD_ACTIVE_HOVER if self.hovered else skin.CARD_ACTIVE
-            borda = skin.CARD_ACTIVE_EDGE
-            pilula = skin.PILL_ON_ACTIVE
-            subtitulo = skin.TEXT_SOFT
-        else:
-            if self.selected:
-                fundo, borda = skin.BG_ROW_SEL, skin.EDGE_STRONG
-            elif self.hovered:
-                fundo, borda = skin.BG_ROW_HOVER, skin.EDGE_STRONG
-            else:
-                fundo, borda = skin.BG_CARD, skin.EDGE
-            pilula = skin.PILL_BG
-            subtitulo = TEXT_MUTED
-        # O CTkFrame repassa a cor nova pros filhos "transparent" sozinho.
-        self.configure(fg_color=fundo, border_color=borda)
-        self.status_pill.configure(fg_color=pilula)
-        self.subtitle_label.configure(text_color=subtitulo)
-
-
-class App(ctk.CTk):
+class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("dark")
-
         self.title(APP_NAME)
-        self.geometry("1160x760")
-        self.minsize(980, 640)
-        self.configure(fg_color=BG)
+        self.configure(bg=skin.BG_APP)
         self._set_window_icon()
 
-        # Fundo em gradiente: ocupa a janela inteira, por baixo de tudo (por
-        # isso e criado antes de qualquer outro widget). So aparece de
-        # verdade no respiro ao redor da barra lateral/area principal --
-        # ver _paint_canvas.
-        self._backdrop_label = tk.Label(self, bd=0, highlightthickness=0, bg=BG)
-        self._backdrop_label.place(x=0, y=0, relwidth=1, relheight=1)
-        self._canvas_size = None
-        self._canvas_job = None
+        self.canvas = tk.Canvas(self, bg=skin.BG_APP, highlightthickness=0, bd=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.kit = ui_kit.Kit(self.canvas)
+        s = self.kit.s
+        self.geometry(f"{s(1160)}x{s(760)}")
+        self.minsize(s(980), s(640))
 
         self.log_queue = queue.Queue()
         # contas que terminaram; preenchida pelas threads dos bots e
@@ -358,33 +111,61 @@ class App(ctk.CTk):
         # thread/janela do jogo (bot.py cuida de travar cada uma na sua
         # copia do client.exe).
         self.running = {}
-        self.account_rows = {}       # account -> AccountRow
-        # conta carregada no formulario pra edicao (e destacada na lista).
-        # None = formulario esta no modo padrao "adicionar conta". So muda
-        # quando o usuario entra no modo edicao explicitamente (botao
-        # direito -> Editar).
+        # conta carregada no formulario pra edicao (None = modo "adicionar").
         self.editing_account = None
+        # Uma selecao so, valendo pras duas abas: e a conta que o "Iniciar
+        # Login" e o "Entrar" (cave) usam.
+        self.selected_account = None
+        self.tab = "Contas"
+        self.list_offset = 0   # rolagem da lista de contas (em linhas)
 
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        # -- cave --
+        # pid -> {"thread", "stop_event", "tipo": "entrar", "cave": sigla, "account": conta}
+        self.cave_runs = {}
+        self.cave_queue = queue.Queue()
+        # [(pid, nick)] da ultima deteccao (nick '' = fora do mundo, None =
+        # sem resposta); None = ainda nao detectou
+        self.cave_online = None
+        self._cave_detecting = False
+        import cave
 
-        self._build_sidebar()
-        self._build_main_area()
+        self._caves = {cave.rotulo(*c): c for c in cave.lista_caves()}
+        # Abre ja na ultima cave usada (ou na primeira da lista).
+        ultimas = cave.recentes()
+        self.cave_choice = next(
+            (r for r, c in self._caves.items() if ultimas and c[0] == ultimas[0]),
+            next(iter(self._caves)),
+        )
+        self.speed_choice = CAVE_VELOCIDADES[0][0]
+
+        # -- desenho --
+        self._bg_size = None
+        self._bg_photo = None
+        self._layout_job = None
+        self._focused = None   # campo de texto em foco (anel azul)
+        self._list_area = None  # retangulo da lista de contas (pra rolagem)
+        self._list_overflow = False
+
+        self._build_embeds()
         self._attach_log_handler()
-        self._refresh_profile_list()
         self._load_launcher_path()
-        self._poll_log_queue()
-        self._try_dark_titlebar()
-        self.bind("<Configure>", self._on_window_configure, add="+")
 
+        self.bind("<Configure>", self._on_configure, add="+")
+        self.canvas.bind("<MouseWheel>", self._on_wheel, add="+")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        self.after(20, self._relayout)
+        self._poll_log_queue()
+        self._try_dark_titlebar()
+        # Deteccao de quem esta online: comeca logo ao abrir o bot e segue
+        # periodica -- a lista mostra online/offline o tempo todo.
+        self.after(300, self._cave_detect_tick)
+
+    # ------------------------------------------------------------ janela
+
     def _set_window_icon(self):
-        """Icone da janela (barra de titulo, Alt+Tab e barra de tarefas).
-        No Windows o .ico e o formato certo; em outros sistemas caimos pro
-        .png via iconphoto. Se nada der certo, segue sem icone -- e so
-        aparencia, nao pode impedir o app de abrir."""
+        """Icone da janela (barra de titulo, Alt+Tab e barra de tarefas). Se
+        nada der certo, segue sem icone -- e so aparencia."""
         try:
             if ICON_ICO.exists():
                 self.iconbitmap(default=str(ICON_ICO))
@@ -399,331 +180,460 @@ class App(ctk.CTk):
             pass
 
     def _try_dark_titlebar(self):
-        """Tenta deixar a barra de titulo da janela escura tambem (Windows
-        10/11). Se nao der, so ignora -- e um detalhe visual, nao afeta o
-        funcionamento."""
+        """Barra de titulo escura (Windows 10/11), da cor do fundo. Se nao
+        der, so ignora -- e um detalhe visual."""
         try:
             import ctypes
 
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            if not hwnd:
-                hwnd = self.winfo_id()
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id()) or self.winfo_id()
             value = ctypes.c_int(1)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value)
-            )
-            # Windows 11: pinta a barra de titulo com a mesma cor do fundo,
-            # pra ela "sumir" e a janela parecer uma peca so. No Windows 10
-            # isso nao existe e a chamada so falha em silencio.
-            DWMWA_CAPTION_COLOR = 35
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
             cor = ctypes.c_int(skin.colorref(skin.BG_APP))
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_CAPTION_COLOR, ctypes.byref(cor), ctypes.sizeof(cor)
-            )
-        except Exception:  # noqa: BLE001 - so um detalhe visual, nunca deve travar a UI
-            pass
-
-    def _on_window_configure(self, event):
-        # <Configure> chega de todo widget filho tambem; so interessa a
-        # janela. Espera o redimensionamento "assentar" antes de redesenhar
-        # -- gerar a imagem a cada pixel arrastado travaria a tela.
-        if event.widget is not self:
-            return
-        if self._canvas_job is not None:
-            self.after_cancel(self._canvas_job)
-        self._canvas_job = self.after(120, self._paint_canvas)
-
-    def _paint_canvas(self):
-        """Desenha o gradiente do fundo (skin.canvas_image) no tamanho atual da
-        janela. Se falhar (Pillow faltando, etc.), fica so a cor solida --
-        e detalhe visual, nunca pode travar o app."""
-        self._canvas_job = None
-        try:
-            from PIL import ImageTk
-
-            self.update_idletasks()
-            tamanho = (self.winfo_width(), self.winfo_height())
-            if tamanho == self._canvas_size or min(tamanho) <= 1:
-                return
-            # O cartao arredondado de cada painel, um pouco maior que a area
-            # de conteudo (que e reta) -- ver skin.canvas_image.
-            I = skin.CARD_INSET
-            cartoes = [
-                (w.winfo_x() - I, w.winfo_y() - I,
-                 w.winfo_x() + w.winfo_width() + I, w.winfo_y() + w.winfo_height() + I)
-                for w in (self._sidebar_card, self._main_card)
-            ]
-            img = skin.canvas_image(*tamanho, cards=cartoes)
-            if img is None:
-                return
-            # a referencia precisa ser guardada num atributo -- sem isso o
-            # Python coleta o PhotoImage e a imagem some da tela sozinha.
-            self._backdrop_photo = ImageTk.PhotoImage(img)
-            self._backdrop_label.configure(image=self._backdrop_photo)
-            self._canvas_size = tamanho
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(cor), ctypes.sizeof(cor))
         except Exception:  # noqa: BLE001
             pass
 
-    # ------------------------------------------------------ barra lateral
-
-    def _build_sidebar(self):
-        # Respiro em volta -- e o que deixa o gradiente do fundo (backdrop_label)
-        # visivel, dando o ar de "cartao flutuando".
-        I = skin.CARD_INSET
-        sidebar = ctk.CTkFrame(
-            self, width=292, fg_color=BG_SIDEBAR, bg_color=BG_SIDEBAR, corner_radius=0,
-        )
-        # Area de CONTEUDO do cartao, reta e encaixada pra dentro: o cartao
-        # arredondado em si e desenhado no fundo (ver _paint_canvas).
-        sidebar.grid(row=1, column=0, sticky="ns", padx=(MARGEM + I, VAO // 2 + I), pady=MARGEM + I)
-        self._sidebar_card = sidebar
-        sidebar.grid_propagate(False)
-        sidebar.grid_rowconfigure(3, weight=1)
-        sidebar.grid_columnconfigure(0, weight=1)
-
-        # -- cabecalho: icone + nome do app, credito discreto embaixo --
-        header = ctk.CTkFrame(sidebar, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="we", padx=14, pady=(14, 0))
-        title_row = ctk.CTkFrame(header, fg_color="transparent")
-        title_row.pack(anchor="w", fill="x")
-
-        logo = load_app_image(32)
-        if logo is not None:
-            ctk.CTkLabel(title_row, text="", image=logo).pack(side="left", padx=(0, 12))
-
-        title_text = ctk.CTkFrame(title_row, fg_color="transparent")
-        title_text.pack(side="left")
-        ctk.CTkLabel(
-            title_text, text="Talisman Online", font=_font(15, "bold"), text_color=TEXT,
-            anchor="w", height=20,
-        ).pack(anchor="w")
-        by_row = ctk.CTkFrame(title_text, fg_color="transparent")
-        by_row.pack(anchor="w")
-        ctk.CTkLabel(by_row, text="Bot Login · by ", font=_font(10), text_color=TEXT_MUTED,
-                     height=16).pack(side="left")
-
-        # O nome do autor leva pro repositorio do projeto. Fica sublinhado
-        # so no hover, pra nao virar mais um elemento gritando na tela.
-        self.author_link = ctk.CTkLabel(
-            by_row, text=APP_AUTHOR, font=_font(10), text_color=TEXT_SECOND, cursor="hand2",
-            height=16,
-        )
-        self.author_link.pack(side="left")
-        self.author_link.bind("<Button-1>", lambda _e: self._open_project_page())
-        self.author_link.bind(
-            "<Enter>",
-            lambda _e: self.author_link.configure(font=_font(10, underline=True), text_color=WHITE),
-        )
-        self.author_link.bind(
-            "<Leave>",
-            lambda _e: self.author_link.configure(font=_font(10), text_color=TEXT_SECOND),
-        )
-
-        ctk.CTkLabel(by_row, text=f"  ·  {APP_VERSION}", font=_font(10), text_color=TEXT_MUTED,
-                     height=16).pack(side="left")
-
-        hairline(sidebar, bg=BG_SIDEBAR).grid(row=1, column=0, sticky="we", padx=14, pady=(20, 0))
-
-        # -- titulo da secao, contagem em pilula + acao secundaria --
-        section = ctk.CTkFrame(sidebar, fg_color="transparent")
-        section.grid(row=2, column=0, sticky="we", padx=14, pady=(16, 8))
-        section.grid_columnconfigure(2, weight=1)
-        self.section_label = ctk.CTkLabel(
-            section, text="Contas", font=_font(12, "bold"), text_color=TEXT, anchor="w"
-        )
-        self.section_label.grid(row=0, column=0, sticky="w")
-        self.count_label = ctk.CTkLabel(
-            section, text="", font=_font(10), text_color=TEXT_SECOND, fg_color=skin.PILL_BG,
-            corner_radius=skin.RADIUS_PILL, height=20, width=26,
-        )
-        self.count_label.grid(row=0, column=1, sticky="w", padx=(8, 0))
-        self.btn_stop = text_button(section, "parar todas", self._stop_bot, width=76, height=22,
-                                    bg=BG_SIDEBAR)
-        self.btn_stop.configure(state="disabled")
-        self.btn_stop.grid(row=0, column=3, sticky="e")
-
-        # -- lista de contas (scrollable) --
-        # Sem caixa em volta: cada conta ja e um cartaozinho, e a lista
-        # "flutua" direto no cartao da barra lateral.
-        self.account_list_frame = ctk.CTkScrollableFrame(
-            sidebar,
-            fg_color="transparent",
-            corner_radius=0,
-            border_width=0,
-            # bem discreta: o CTk nao esconde a barra sozinho quando a lista
-            # cabe inteira, entao ela fica quase invisivel parada e so
-            # aparece de verdade quando voce passa o mouse/rola.
-            scrollbar_button_color=skin.BG_SIDEBAR,
-            scrollbar_button_hover_color=skin.SCROLLBAR_HOVER,
-        )
-        self.account_list_frame.grid(row=3, column=0, sticky="nswe", padx=(6, 0), pady=(0, 8))
-        self.account_list_frame.grid_columnconfigure(0, weight=1)
-
-        # -- rodape da barra lateral --
-        footer = ctk.CTkFrame(sidebar, fg_color="transparent")
-        footer.grid(row=4, column=0, sticky="we", padx=14, pady=(6, 14))
-        self.btn_start = primary_button(footer, "Iniciar todas", self._start_all, width=256,
-                                        bg=BG_SIDEBAR)
-        self.btn_start.configure(height=40)
-        self.btn_start.pack(fill="x")
-        ghost_button(footer, "+  Nova conta", self._clear_form, width=256, height=38,
-                     bg=BG_SIDEBAR).pack(fill="x", pady=(10, 0))
-
-    # ---------------------------------------------------------- main area
-
-    def _build_main_area(self):
-        I = skin.CARD_INSET
-        main = ctk.CTkFrame(
-            self, fg_color=SURFACE, bg_color=SURFACE, corner_radius=0,
-        )
-        main.grid(row=1, column=1, sticky="nswe", padx=(VAO // 2 + I, MARGEM + I), pady=MARGEM + I)
-        self._main_card = main
-        main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(2, weight=0)
-        main.grid_rowconfigure(4, weight=1)
-
-        self._build_page_header(main)
-        self._build_detail_panel(main)
-        self._build_log_panel(main)
-
-    def _build_page_header(self, master):
-        header = ctk.CTkFrame(master, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="we", padx=24, pady=(20, 0))
-        self.page_title = ctk.CTkLabel(
-            header, text="Adicione uma conta", font=_font(20, "bold"), text_color=TEXT, anchor="w"
-        )
-        self.page_title.pack(anchor="w")
-        self.page_sub = ctk.CTkLabel(
-            header,
-            text=NEW_ACCOUNT_HINT,
-            font=_font(11),
-            text_color=TEXT_MUTED,
-            anchor="w",
-            justify="left",
-            wraplength=600,
-        )
-        self.page_sub.pack(anchor="w", pady=(3, 0))
-        # A quebra de linha acompanha a largura do cartao (com um valor fixo
-        # o texto era cortado a direita quando o cartao ficava mais estreito).
-        # O CTk multiplica o wraplength pela escala do Windows, entao a
-        # largura em pixels reais e dividida por ela antes.
-        header.bind(
-            "<Configure>",
-            lambda e: self.page_sub.configure(
-                wraplength=max(200, int(e.width / self.page_sub._get_widget_scaling()))
-            ),
-        )
-
-    def _build_detail_panel(self, master):
-        wrapper = ctk.CTkFrame(master, fg_color="transparent")
-        wrapper.grid(row=1, column=0, sticky="we", padx=24, pady=(22, 0))
-        wrapper.grid_columnconfigure(0, weight=1)
-        self._build_form(wrapper)
-
-    def _update_page_header(self):
-        """O cabecalho da direita mostra o contexto atual: a conta em edicao,
-        ou 'Adicione uma conta' quando o formulario esta no modo padrao
-        (nenhuma conta em edicao)."""
-        if not self.editing_account:
-            self.page_title.configure(text="Adicione uma conta")
-            self.page_sub.configure(text=NEW_ACCOUNT_HINT)
+    def _on_configure(self, event):
+        # So interessa a janela. Espera o redimensionamento "assentar" antes
+        # de redesenhar o fundo -- gerar a imagem a cada pixel travaria.
+        if event.widget is not self:
             return
+        if self._layout_job is not None:
+            self.after_cancel(self._layout_job)
+        self._layout_job = self.after(90, self._relayout)
 
-        data = profiles.load_profiles()
-        profile = next(
-            (p for p in profiles.list_profiles(data) if p.get("account") == self.editing_account), None
+    def _panels(self):
+        s = self.kit.s
+        W, H = self.canvas.winfo_width(), self.canvas.winfo_height()
+        M, gap, sw = s(26), s(18), s(300)
+        return (M, M, M + sw, H - M), (M + sw + gap, M, W - M, H - M)
+
+    def _relayout(self):
+        """Redesenha o fundo (so quando o tamanho muda) e a interface."""
+        self._layout_job = None
+        W, H = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if W <= 1 or H <= 1:
+            self.after(50, self._relayout)
+            return
+        if (W, H) != self._bg_size:
+            try:
+                from PIL import ImageTk
+                import numpy as np
+
+                img = ui_kit.render_background(W, H, list(self._panels()), self.kit.s(26))
+                self._bg_photo = ImageTk.PhotoImage(img)
+                self.kit.bg = np.asarray(img)
+                self.canvas.delete("bg")
+                self.canvas.create_image(0, 0, image=self._bg_photo, anchor="nw", tags=("bg",))
+                self.canvas.tag_lower("bg")
+                self._bg_size = (W, H)
+            except Exception:  # noqa: BLE001 - sem Pillow/numpy: fica a cor solida
+                bot.log.debug("Nao consegui desenhar o fundo.", exc_info=True)
+        self.render()
+
+    # ------------------------------------------------ widgets encaixados
+
+    def _make_entry(self, show=""):
+        e = tk.Entry(
+            self.canvas, bd=0, relief="flat", highlightthickness=0, show=show,
+            fg=skin.TEXT, insertbackground=skin.TEXT, font=self.kit.font(13),
+            selectbackground=skin.SYSTEM_BLUE, selectforeground="#ffffff",
         )
-        server = (profile or {}).get("server_name", "")
-        character = (profile or {}).get("character_name", "")
-        self.page_title.configure(text=self.editing_account)
-        self.page_sub.configure(
-            text=" · ".join(part for part in (server, character) if part) or "sem servidor/personagem definidos"
+        e.bind("<FocusIn>", lambda _e: self._set_focus(e), add="+")
+        e.bind("<FocusOut>", lambda _e: self._set_focus(None), add="+")
+        return e
+
+    def _build_embeds(self):
+        self.entry_account = self._make_entry()
+        self.entry_password = self._make_entry(show="•")
+        self.entry_server = self._make_entry()
+        self.entry_character = self._make_entry()
+        self.entry_launcher_path = self._make_entry()
+        self.entry_account.bind("<Return>", lambda _e: self._save_profile())
+        self.entry_character.bind("<Return>", lambda _e: self._save_profile())
+
+        self.log_text = tk.Text(
+            self.canvas, bd=0, relief="flat", highlightthickness=0, wrap="word",
+            fg=skin.TEXT_SOFT, font=self.kit.font(12, family=skin.FONT_MONO),
+            padx=0, pady=0, cursor="arrow", insertwidth=0,
+            selectbackground=skin.SYSTEM_BLUE, selectforeground="#ffffff",
+        )
+        self.log_text.configure(state="disabled")
+        self.log_text.tag_config("error", foreground=skin.DANGER)
+        self.log_text.tag_config("warning", foreground=skin.WARNING)
+        self.log_text.tag_config("info", foreground=skin.TEXT_SOFT)
+
+        self._form_entries = [
+            self.entry_account, self.entry_password, self.entry_server,
+            self.entry_character, self.entry_launcher_path,
+        ]
+        # um item "window" do canvas por widget, criado uma vez e so movido
+        self._win = {}
+        for w in self._form_entries + [self.log_text]:
+            self._win[w] = self.canvas.create_window(0, 0, window=w, anchor="nw", tags=("embed",),
+                                                     state="hidden")
+
+    def _place(self, widget, x, y, w, h, bg):
+        item = self._win[widget]
+        self.canvas.coords(item, x, y)
+        self.canvas.itemconfigure(item, width=max(1, int(w)), height=max(1, int(h)), state="normal")
+        widget.configure(bg=bg)
+
+    def _hide(self, widget):
+        self.canvas.itemconfigure(self._win[widget], state="hidden")
+
+    def _set_focus(self, entry):
+        if entry is not self._focused:
+            self._focused = entry
+            self.render()
+
+    # ------------------------------------------------------------ desenho
+
+    def render(self):
+        """Redesenha todos os componentes a partir do estado atual."""
+        if self._bg_size is None:
+            return
+        self.kit.clear()
+        side, main = self._panels()
+        self._draw_sidebar(*side)
+        self._draw_main(*main)
+
+    # -- barra lateral --
+
+    def _logo(self, size):
+        def gerar():
+            from PIL import Image
+
+            return Image.open(ICON_PNG).convert("RGBA").resize((size, size), Image.LANCZOS)
+
+        try:
+            return self.kit.photo(("logo", size), gerar) if ICON_PNG.exists() else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _draw_sidebar(self, x0, y0, x1, y1):
+        k, s = self.kit, self.kit.s
+        p = s(20)
+        cw = x1 - x0 - 2 * p
+
+        # cabecalho: icone + nome do app, credito embaixo
+        logo = self._logo(s(36))
+        tx = x0 + p
+        if logo is not None:
+            k.image(x0 + p, y0 + p + s(2), logo)
+            tx += s(48)
+        k.text(tx, y0 + p - s(1), "Talisman Online", skin.TYPE["title2"], "bold",
+               family=skin.FONT_TITLE)
+        by_y = y0 + p + s(24)
+        partes = [("Bot Login · by ", None), (APP_AUTHOR, "link"), (f"  ·  {APP_VERSION}", None)]
+        cx = tx
+        for texto, tipo in partes:
+            cor = skin.TEXT_SOFT if tipo else skin.TEXT_MUTED
+            tid = k.text(cx, by_y, texto, skin.TYPE["subheadline"], color=cor)
+            largura = k.text_width(texto, skin.TYPE["subheadline"])
+            if tipo == "link":
+                k.add_hot(
+                    (cx, by_y, cx + largura, by_y + s(16)), on_click=self._open_project_page,
+                    on_hover=lambda d, tid=tid: self.canvas.itemconfigure(
+                        tid, fill="#ffffff" if d else skin.TEXT_SOFT),
+                )
+            cx += largura
+
+        y = y0 + p + s(56)
+        k.divider(x0 + p, x1 - p, y)
+        y += s(18)
+
+        # titulo da secao + contagem + "parar todas"
+        contas = profiles.list_profiles(profiles.load_profiles())
+        k.text(x0 + p, y + s(3), "Contas", skin.TYPE["headline"], "bold")
+        if contas:
+            bx = x0 + p + k.text_width("Contas", skin.TYPE["headline"], "bold") + s(8)
+            k.badge(bx + k.text_width(str(len(contas)), 11, "bold") + s(20), y,
+                    str(len(contas)), (255, 255, 255, 30), skin.TEXT_SOFT)
+        k.button(x1 - p - s(84), y, s(84), s(22), "parar todas", self._stop_bot,
+                 style="plain", enabled=bool(self.running), size=12)
+        y += s(36)
+
+        # rodape: Iniciar Login + Nova conta
+        h_ini, h_nova, vao = s(42), s(38), s(10)
+        rodape_y = y1 - p - h_nova - vao - h_ini
+        sel = self.selected_account
+        if sel and sel in self.running:
+            rotulo_login = "Parar Login"
+        else:
+            rotulo_login = "Iniciar Login"
+        k.button(x0 + p, rodape_y, cw, h_ini, rotulo_login, self._toggle_login_selected,
+                 style="white", enabled=bool(sel), size=14)
+        k.button(x0 + p, rodape_y + h_ini + vao, cw, h_nova, "+  Nova conta", self._clear_form,
+                 style="gray", size=13)
+
+        # lista de contas
+        lista_y0, lista_y1 = y, rodape_y - s(16)
+        self._list_area = (x0, lista_y0, x1, lista_y1)
+        if not contas:
+            k.text(x0 + p, lista_y0 + s(6),
+                   "Nenhuma conta cadastrada.\nClique em '+ Nova conta' pra comecar.",
+                   skin.TYPE["callout"], color=skin.TEXT_DIM)
+            self._list_overflow = False
+            return
+        rh, rvao = s(66), s(10)
+        cabem = max(1, (lista_y1 - lista_y0 + rvao) // (rh + rvao))
+        self._list_overflow = len(contas) > cabem
+        self.list_offset = max(0, min(self.list_offset, len(contas) - cabem))
+        for i, prof in enumerate(contas[self.list_offset:self.list_offset + cabem]):
+            self._draw_account_row(prof, x0 + p - s(4), lista_y0 + i * (rh + rvao), cw + s(8), rh)
+        if self._list_overflow:
+            k.text((x0 + x1) / 2, lista_y1 + s(2), "role pra ver mais contas",
+                   skin.TYPE["caption"], color=skin.TEXT_DIM, anchor="n")
+
+    def _draw_account_row(self, prof, x, y, w, h):
+        k, s = self.kit, self.kit.s
+        conta = prof.get("account", "")
+        login_on = conta in self.running
+        estado = self._cave_state_for(prof)
+        ativo = login_on or estado == "entrando"
+        selecionado = conta == self.selected_account
+
+        normal, hover = k.card_photos(w, h, active=ativo, selected=selecionado)
+        iid = k.image(x, y, normal)
+        k.add_hot(
+            (x, y, x + w, y + h),
+            on_click=lambda: self._on_account_row_click(conta),
+            on_double=lambda: self._quick_start_account(conta),
+            on_right=lambda e: self._show_row_menu(conta, e),
+            on_hover=lambda d: self.canvas.itemconfigure(iid, image=hover if d else normal),
         )
 
-    def _make_entry(self, master, placeholder="", show=None):
-        entry = ctk.CTkEntry(
-            master,
-            placeholder_text=placeholder,
-            placeholder_text_color=TEXT_DIM,
-            show=show,
-            fg_color=SURFACE_ALT,
-            border_color=BORDER_STRONG,
-            border_width=1,
-            text_color=TEXT,
-            font=_font(12),
-            corner_radius=skin.RADIUS_MD,
-            height=38,
-        )
-        # anel de foco -- feedback de qual campo esta ativo, sem cor nenhuma
-        entry.bind("<FocusIn>", lambda _e: entry.configure(border_color=BORDER_FOCUS))
-        entry.bind("<FocusOut>", lambda _e: entry.configure(border_color=BORDER_STRONG))
-        return entry
+        # interruptor do login (HIG: switch) -- liga/desliga SO o login
+        k.toggle(x + s(14), y + (h - s(25)) / 2, login_on,
+                 lambda: self._on_account_toggled(conta, not login_on))
 
-    def _field_label(self, master, text):
-        return ctk.CTkLabel(master, text=text, font=_font(11), text_color=LABEL, anchor="w")
+        tx = x + s(70)
+        k.text(tx, y + s(13), conta, 14, "bold")
+        sub = " · ".join(v for v in (prof.get("server_name", ""), prof.get("character_name", "")) if v)
+        k.text(tx, y + s(36), sub or "sem servidor/personagem", skin.TYPE["subheadline"],
+               color="#dbe8ff" if ativo else skin.TEXT_MUTED, width=w - s(84))
 
-    def _build_form(self, tab):
-        """Formulario unico da conta: login/senha, servidor/nick e a pasta
-        do jogo. Sem abas -- tudo cabe numa tela so."""
-        tab.grid_columnconfigure((0, 1), weight=1, uniform="cols")
+        # etiqueta de estado
+        if login_on:
+            texto, fill, cor, dot = "rodando", _rgba_hex("#f5f5f7"), "#0a64e0", skin.SYSTEM_GREEN
+        elif estado == "entrando":
+            texto, fill, cor, dot = "entrando na cave", _rgba_hex("#f5f5f7"), "#0a64e0", skin.SYSTEM_GREEN
+        elif estado == "online":
+            texto, fill, cor, dot = "online", (48, 209, 88, 52), skin.SYSTEM_GREEN, skin.SYSTEM_GREEN
+        elif estado == "offline":
+            texto, fill, cor, dot = "offline", (255, 255, 255, 22), skin.SYSTEM_GRAY, skin.SYSTEM_GRAY2
+        else:
+            texto, fill, cor, dot = "...", (255, 255, 255, 22), skin.SYSTEM_GRAY, skin.SYSTEM_GRAY3
+        k.badge(x + w - s(12), y + s(11), texto, fill, cor, dot=dot)
 
-        self._field_label(tab, "Conta").grid(row=0, column=0, sticky="w", pady=(0, 5))
-        self.entry_account = self._make_entry(tab, "Login")
-        self.entry_account.grid(row=1, column=0, sticky="we", padx=(0, 9))
+    # -- area principal --
 
-        self._field_label(tab, "Senha").grid(row=0, column=1, sticky="w", padx=(9, 0), pady=(0, 5))
-        self.entry_password = self._make_entry(tab, "Senha da conta", show="*")
-        self.entry_password.grid(row=1, column=1, sticky="we", padx=(9, 0))
+    def _draw_main(self, x0, y0, x1, y1):
+        k, s = self.kit, self.kit.s
+        p = s(30)
+        k.segmented(x0 + p, y0 + s(22), TABS, self.tab, self._show_tab)
+        y = y0 + s(22) + s(32) + s(28)
+        if self.tab == "Contas":
+            y = self._draw_tab_contas(x0 + p, y, x1 - p)
+        else:
+            for e in self._form_entries:
+                self._hide(e)
+            y = self._draw_tab_cave(x0 + p, y, x1 - p)
+        self._draw_log(x0 + p, y + s(26), x1 - p, y1 - s(24))
 
-        self._field_label(tab, "Servidor").grid(row=2, column=0, sticky="w", pady=(16, 5))
-        self.combo_server = ctk.CTkComboBox(
-            tab,
-            values=KNOWN_SERVERS,
-            fg_color=SURFACE_ALT,
-            border_color=BORDER_STRONG,
-            border_width=1,
-            button_color=skin.BTN_BG,
-            button_hover_color=skin.BTN_HOVER,
-            dropdown_fg_color=skin.BG_CARD,
-            dropdown_hover_color=skin.ACCENT_DIM,
-            dropdown_text_color=TEXT,
-            dropdown_font=_font(11),
-            text_color=TEXT,
-            font=_font(12),
-            corner_radius=skin.RADIUS_MD,
-            height=38,
-        )
-        self.combo_server.set("")
-        self.combo_server.grid(row=3, column=0, sticky="we", padx=(0, 9))
+    def _title(self, x, y, titulo, sub, largura):
+        k, s = self.kit, self.kit.s
+        k.text(x, y, titulo, skin.TYPE["large_title"], "bold", family=skin.FONT_TITLE)
+        k.text(x, y + s(38), sub, skin.TYPE["callout"], color=skin.TEXT_MUTED, width=largura)
+        linhas = 1 + k.text_width(sub, skin.TYPE["callout"]) // max(1, largura)
+        return y + s(38) + linhas * s(17) + s(22)
 
-        self._field_label(tab, "Nick").grid(row=2, column=1, sticky="w", padx=(9, 0), pady=(16, 5))
-        self.entry_character = self._make_entry(tab, "")
-        self.entry_character.grid(row=3, column=1, sticky="we", padx=(9, 0))
+    def _label(self, x, y, texto):
+        self.kit.text(x, y, texto, skin.TYPE["subheadline"], color=skin.TEXT_MUTED)
 
-        # ---- pasta do jogo ----
-        # Vale pra todas as contas (e uma instalacao so do jogo), mas fica
-        # aqui no formulario pra nao precisar de uma aba so pra isso.
-        self._field_label(tab, "Pasta do jogo").grid(row=4, column=0, sticky="w", pady=(16, 5))
-        pasta_row = ctk.CTkFrame(tab, fg_color="transparent")
-        pasta_row.grid(row=5, column=0, columnspan=2, sticky="we")
-        pasta_row.grid_columnconfigure(0, weight=1)
-        self.entry_launcher_path = self._make_entry(
-            pasta_row, "onde o jogo esta instalado (a pasta que tem o game.exe)"
-        )
-        self.entry_launcher_path.grid(row=0, column=0, sticky="we", padx=(0, 8))
-        ghost_button(pasta_row, "Procurar", self._browse_launcher_path, width=100,
-                     bg=BG).grid(row=0, column=1)
+    def _entry_field(self, entry, x, y, w, h, direita=0):
+        """Campo de texto (HIG) com o tk.Entry encaixado dentro."""
+        s = self.kit.s
+        cor = self.kit.field(x, y, w, h, focused=self._focused is entry)
+        fh = self.kit.font(13).metrics("linespace")
+        self._place(entry, x + s(12), y + (h - fh) / 2, w - s(24) - direita, fh, cor)
 
-        hairline(tab, bg=BG).grid(row=7, column=0, columnspan=2, sticky="we", pady=(24, 0))
+    def _draw_tab_contas(self, x0, y, x1):
+        k, s = self.kit, self.kit.s
+        cw = x1 - x0
+        if self.editing_account:
+            prof = self._profile(self.editing_account) or {}
+            sub = " · ".join(v for v in (prof.get("server_name", ""), prof.get("character_name", "")) if v)
+            y = self._title(x0, y, self.editing_account, sub or "sem servidor/personagem definidos", cw)
+        else:
+            y = self._title(x0, y, "Adicione uma conta", NEW_ACCOUNT_HINT, cw)
 
-        buttons = ctk.CTkFrame(tab, fg_color="transparent")
-        buttons.grid(row=8, column=0, columnspan=2, sticky="we", pady=(16, 4))
-        primary_button(buttons, "Salvar conta", self._save_profile, width=118,
-                       bg=BG).pack(side="left")
+        col = (cw - s(18)) / 2
+        fh = s(38)
+        xr = x0 + col + s(18)
+        linha = s(20) + fh + s(16)
+
+        self._label(x0, y, "Conta")
+        self._label(xr, y, "Senha")
+        self._entry_field(self.entry_account, x0, y + s(20), col, fh)
+        self._entry_field(self.entry_password, xr, y + s(20), col, fh)
+        y += linha
+
+        self._label(x0, y, "Servidor")
+        self._label(xr, y, "Nick")
+        self._entry_field(self.entry_server, x0, y + s(20), col, fh, direita=s(26))
+        # chevron do servidor: abre a lista dos servidores conhecidos
+        chev_x = x0 + col - s(30)
+        k.chevron(chev_x + s(14), y + s(20) + fh / 2)
+        k.add_hot((chev_x, y + s(20), x0 + col, y + s(20) + fh), on_click=lambda: self._menu_servidor(
+            x0, y + s(20) + fh + s(4)))
+        self._entry_field(self.entry_character, xr, y + s(20), col, fh)
+        y += linha
+
+        self._label(x0, y, "Pasta do jogo")
+        bw = s(112)
+        self._entry_field(self.entry_launcher_path, x0, y + s(20), cw - bw - s(10), fh)
+        k.button(x1 - bw, y + s(20), bw, fh, "Procurar", self._browse_launcher_path, style="gray")
+        y += linha + s(4)
+
+        k.divider(x0, x1, y)
+        y += s(18)
+        k.button(x0, y, s(150), s(40), "Salvar conta", self._save_profile, style="white", size=14)
+        return y + s(40)
+
+    def _draw_tab_cave(self, x0, y, x1):
+        k, s = self.kit, self.kit.s
+        cw = x1 - x0
+        y = self._title(x0, y, "Entrar na cave", CAVE_HINT, cw)
+
+        # conta selecionada (so leitura)
+        self._label(x0, y, "Conta")
+        k.button(x1 - s(76), y - s(3), s(76), s(20), "atualizar", self._cave_detect, style="plain", size=12)
+        fh = s(38)
+        k.field(x0, y + s(20), cw, fh)
+        prof = self._profile(self.selected_account) if self.selected_account else None
+        pid = self._selected_cave_pid()
+        if not prof:
+            texto, cor = "Selecione uma conta online na lista da esquerda", skin.TEXT_MUTED
+        else:
+            nick = (prof.get("character_name") or "").strip()
+            if not nick:
+                estado = "sem nick cadastrado -- edite a conta"
+            elif self.cave_online is None:
+                estado = "procurando..."
+            else:
+                estado = "online" if pid else "offline"
+            texto = f"{prof.get('account')}   ·   {nick or '?'}   ·   {estado}"
+            cor = skin.TEXT if pid else skin.TEXT_MUTED
+        k.text(x0 + s(14), y + s(20) + fh / 2, texto, skin.TYPE["body"], color=cor, anchor="w")
+        y += s(20) + fh + s(6)
+        status = self._cave_status_text()
+        if status:
+            k.text(x0 + s(2), y, status, skin.TYPE["footnote"], color=skin.TEXT_DIM)
+        y += s(22)
+
+        col = (cw - s(18)) / 2
+        xr = x0 + col + s(18)
+        self._label(x0, y, "Cave")
+        self._label(xr, y, "Velocidade")
+        k.popup(x0, y + s(20), col, fh, self.cave_choice, lambda: self._menu_cave(x0, y + s(20) + fh + s(4)))
+        k.popup(xr, y + s(20), col, fh, self.speed_choice,
+                lambda: self._menu_velocidade(xr, y + s(20) + fh + s(4)))
+        y += s(20) + fh + s(22)
+
+        k.divider(x0, x1, y)
+        y += s(18)
+        run = self.cave_runs.get(pid) if pid else None
+        k.button(x0, y, s(150), s(40), "Parar" if run else "Entrar", self._toggle_cave,
+                 style="white", enabled=bool(pid), size=14)
+        return y + s(40)
+
+    def _draw_log(self, x0, y0, x1, y1):
+        k, s = self.kit, self.kit.s
+        k.divider(x0, x1, y0 - s(14))
+        k.text(x0, y0 + s(4), "Registro", skin.TYPE["headline"], "bold")
+        k.button(x1 - s(60), y0, s(60), s(22), "limpar", self._clear_log, style="plain", size=12)
+        top = y0 + s(32)
+        h = max(s(90), y1 - top)
+        cor = skin.mix(k.sample((x0 + x1) / 2, top + h / 2), "#000000", 0.45)
+        foto = k.photo(("logbox", x1 - x0, h, cor), lambda: ui_kit.rounded(
+            x1 - x0, h, s(16), fill=_rgba_hex(cor), outline=(255, 255, 255, 24)))
+        k.image(x0, top, foto)
+        self._place(self.log_text, x0 + s(14), top + s(12), x1 - x0 - s(28), h - s(24), cor)
+
+    # -- menus --
+
+    def _menu_at(self, items, x, y, checked=None):
+        self.kit.menu(items, self.canvas.winfo_rootx() + x, self.canvas.winfo_rooty() + y, checked=checked)
+
+    def _menu_servidor(self, x, y):
+        def escolher(nome):
+            self.entry_server.delete(0, "end")
+            self.entry_server.insert(0, nome)
+
+        self._menu_at([(n, lambda n=n: escolher(n)) for n in KNOWN_SERVERS], x, y,
+                      checked=self.entry_server.get())
+
+    def _menu_cave(self, x, y):
+        """Pop-up das caves: as usadas por ultimo primeiro (secao
+        "Recentes"), depois a lista completa na ordem de sempre."""
+        import cave
+
+        def escolher(rotulo):
+            self.cave_choice = rotulo
+            self.render()
+
+        por_sigla = {c[0]: r for r, c in self._caves.items()}
+        itens = []
+        recentes = [por_sigla[s] for s in cave.recentes() if s in por_sigla]
+        if recentes:
+            itens.append(("Recentes", None))
+            itens += [(r, lambda r=r: escolher(r)) for r in recentes]
+            itens += [None, ("Todas as caves", None)]
+        itens += [(r, lambda r=r: escolher(r)) for r in self._caves]
+        self._menu_at(itens, x, y, checked=self.cave_choice)
+
+    def _menu_velocidade(self, x, y):
+        def escolher(rotulo):
+            self.speed_choice = rotulo
+            self.render()
+
+        self._menu_at([(r, lambda r=r: escolher(r)) for r, _, _ in CAVE_VELOCIDADES], x, y,
+                      checked=self.speed_choice)
+
+    def _show_row_menu(self, account, event):
+        """Menu do botao direito em cima de uma conta. "Editar" e o UNICO
+        caminho que carrega uma conta no formulario."""
+        rodando = account in self.running
+        self.kit.menu([
+            ("Parar login" if rodando else "Iniciar login",
+             lambda: self._on_account_toggled(account, not rodando)),
+            None,
+            ("Editar", lambda: self._start_edit(account)),
+            ("Remover", lambda: self._remove_profile(account)),
+            None,
+            ("Abrir a pasta das minhas contas", self._open_data_folder),
+        ], event.x_root, event.y_root)
+
+    def _on_wheel(self, event):
+        a = self._list_area
+        if not a or not self._list_overflow:
+            return
+        if a[0] <= event.x <= a[2] and a[1] <= event.y <= a[3]:
+            self.list_offset += -1 if event.delta > 0 else 1
+            self.render()
+
+    def _show_tab(self, nome):
+        self.tab = nome
+        if nome == "Entrar Cave":
+            # Abriu a aba: procura os jogos online na hora.
+            self._cave_detect()
+        self.render()
+
+    # ------------------------------------------------------------- utilidades
 
     def _open_project_page(self):
-        """Abre o repositorio do projeto no navegador."""
         try:
             import webbrowser
 
@@ -732,61 +642,13 @@ class App(ctk.CTk):
             messagebox.showinfo("Projeto", APP_URL)
 
     def _open_data_folder(self):
-        """Abre no Explorer a pasta onde as contas ficam salvas (Documentos)
-        -- pra voce poder ver com os proprios olhos o perfis.json e o que
-        tem dentro dele."""
+        """Abre no Explorer a pasta onde as contas ficam salvas."""
         try:
             import os
-            import subprocess
-            import sys
 
-            path = str(USER_DATA_DIR)
-            if sys.platform == "win32":
-                os.startfile(path)  # noqa: S606
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
+            os.startfile(str(USER_DATA_DIR))  # noqa: S606
         except Exception as exc:  # noqa: BLE001
-            messagebox.showinfo(
-                "Pasta das contas", f"Suas contas ficam em:\n\n{USER_DATA_DIR}\n\n({exc})"
-            )
-
-    def _build_log_panel(self, master):
-        hairline(master, bg=BG).grid(row=3, column=0, sticky="we", padx=24, pady=(28, 0))
-
-        wrapper = ctk.CTkFrame(master, fg_color="transparent")
-        wrapper.grid(row=4, column=0, sticky="nswe", padx=24, pady=(20, 16))
-        wrapper.grid_columnconfigure(0, weight=1)
-        wrapper.grid_rowconfigure(1, weight=1)
-
-        head = ctk.CTkFrame(wrapper, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="we", pady=(0, 8))
-        head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            head, text="Registro", font=_font(12, "bold"), text_color=TEXT, anchor="w"
-        ).grid(row=0, column=0, sticky="w")
-        text_button(head, "limpar", self._clear_log, width=60, height=22,
-                    bg=BG).grid(row=0, column=1, sticky="e")
-
-        self.log_text = ctk.CTkTextbox(
-            wrapper,
-            fg_color=skin.BG_SUNKEN,
-            border_color=skin.EDGE_PANEL,
-            border_width=1,
-            text_color=TEXT_SECOND,
-            corner_radius=skin.RADIUS_LG - 6,
-            font=_font(11, family=FONT_MONO_FAMILY),
-            wrap="word",
-            activate_scrollbars=True,
-            scrollbar_button_color=skin.SCROLLBAR_IDLE,
-            scrollbar_button_hover_color=skin.SCROLLBAR_HOVER,
-        )
-        self.log_text.grid(row=1, column=0, sticky="nswe")
-        self.log_text.configure(state="disabled")
-        self.log_text.tag_config("error", foreground=DANGER)
-        self.log_text.tag_config("warning", foreground=WARNING)
-        self.log_text.tag_config("info", foreground=TEXT_SECOND)
+            messagebox.showinfo("Pasta das contas", f"Suas contas ficam em:\n\n{USER_DATA_DIR}\n\n({exc})")
 
     def _attach_log_handler(self):
         handler = QueueLogHandler(self.log_queue)
@@ -794,98 +656,27 @@ class App(ctk.CTk):
         bot.log.addHandler(handler)
         bot.log.setLevel(logging.INFO)
 
-    # -------------------------------------------------------- perfis (CRUD)
+    # ------------------------------------------------------- contas (CRUD)
+
+    def _profile(self, account):
+        return next(
+            (p for p in profiles.list_profiles(profiles.load_profiles()) if p.get("account") == account),
+            None,
+        )
 
     def _refresh_profile_list(self):
-        for row in self.account_list_frame.winfo_children():
-            row.destroy()
-        self.account_rows = {}
+        self.render()
 
-        data = profiles.load_profiles()
-        accounts = profiles.list_profiles(data)
-
-        if accounts:
-            self.count_label.configure(text=str(len(accounts)))
-            self.count_label.grid()
-        else:
-            self.count_label.grid_remove()
-
-        if not accounts:
-            # criada na hora (e destruida junto com as linhas no proximo
-            # refresh) -- assim nao existe widget fixo aqui pra ficar com
-            # referencia pendurada depois de destruido.
-            ctk.CTkLabel(
-                self.account_list_frame,
-                text="Nenhuma conta cadastrada.\nClique em '+ Nova conta' pra comecar.",
-                font=_font(10),
-                text_color=TEXT_DIM,
-                justify="left",
-                anchor="w",
-            ).grid(row=0, column=0, sticky="w", padx=10, pady=14)
-        else:
-            for idx, p in enumerate(accounts):
-                account = p.get("account", "")
-                row = AccountRow(
-                    self.account_list_frame,
-                    self,
-                    account,
-                    p.get("server_name", ""),
-                    p.get("character_name", ""),
-                    is_running=(account in self.running),
-                )
-                row.grid(row=idx, column=0, sticky="we", pady=(0, 8))
-                row.set_selected(account == self.editing_account)
-                self.account_rows[account] = row
-
-        self._update_running_state()
-
-    def _show_row_menu(self, account, event):
-        """Menu do botao direito em cima de uma conta: editar e remover.
-        Essas acoes nao tem botao fixo na tela de proposito -- sao raras
-        perto de 'iniciar', e sujariam o formulario.
-
-        Importante: "Editar" (chamando _start_edit) e o UNICO caminho que
-        carrega os dados de uma conta no formulario -- clicar na linha
-        (simples ou duplo) nunca abre uma conta pra edicao."""
-        rodando = account in self.running
-
-        menu = tk.Menu(
-            self,
-            tearoff=0,
-            bg=skin.BG_CARD,
-            fg=skin.TEXT_SOFT,
-            activebackground=skin.ACCENT_DIM,
-            activeforeground=skin.TEXT,
-            bd=0,
-            relief="flat",
-            font=(FONT_FAMILY, 9),
-        )
-        menu.add_command(
-            label="Parar" if rodando else "Iniciar",
-            command=lambda: self._on_account_toggled(account, not rodando),
-        )
-        menu.add_separator()
-        menu.add_command(label="Editar", command=lambda: self._start_edit(account))
-        menu.add_separator()
-        menu.add_command(label="Remover", command=lambda: self._remove_profile(account))
-        menu.add_separator()
-        menu.add_command(label="Abrir a pasta das minhas contas", command=self._open_data_folder)
-
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+    def _on_account_row_click(self, account):
+        self.selected_account = account
+        self.render()
 
     def _on_account_toggled(self, account, checked):
-        """Chamado quando o usuario clica na caixinha de uma conta. Marcar
-        inicia o login dessa conta na hora; desmarcar para ela."""
+        """Liga (inicia o login) ou desliga (para) a conta."""
         if checked:
             if account in self.running:
                 return
-            data = profiles.load_profiles()
-            profile = next(
-                (p for p in profiles.list_profiles(data) if p.get("account") == account), None
-            )
+            profile = self._profile(account)
             if not profile:
                 return
             self._start_accounts([profile], confirm_multi=False)
@@ -895,65 +686,43 @@ class App(ctk.CTk):
                 info["stop_event"].set()
                 self._log_direct(f"Parando '{account}'...")
 
-    def _start_all(self):
-        """Marca todas as contas e inicia todas de uma vez."""
-        data = profiles.load_profiles()
-        all_profiles = profiles.list_profiles(data)
-        if not all_profiles:
-            messagebox.showinfo(
-                "Nenhuma conta", "Cadastre pelo menos uma conta antes de iniciar."
-            )
-            return
-        for row in self.account_rows.values():
-            row.check_var.set(True)
-        self._start_accounts(all_profiles, confirm_multi=False)
-
-    def _selected_for_start(self):
-        return [acc for acc, row in self.account_rows.items() if row.check_var.get()]
+    def _toggle_login_selected(self):
+        """Botao "Iniciar Login": inicia (ou para) o login da conta selecionada."""
+        account = self.selected_account
+        if account:
+            self._on_account_toggled(account, account not in self.running)
 
     def _start_edit(self, account):
-        """Entra no modo edicao pra essa conta: carrega os dados dela no
-        formulario e destaca a linha correspondente na lista. Esse e o
-        UNICO caminho que preenche o formulario com uma conta ja
-        cadastrada -- so chamado pelo item 'Editar' do menu de botao
-        direito da linha (App._show_row_menu). Clicar na linha (simples ou
-        duplo) nunca chama isso."""
-        data = profiles.load_profiles()
-        profile = next((p for p in profiles.list_profiles(data) if p.get("account") == account), None)
+        """Modo edicao: carrega a conta no formulario (so pelo botao direito
+        -> Editar). Tambem seleciona a conta."""
+        profile = self._profile(account)
         if not profile:
             return
-
         self.editing_account = account
-        for acc, row in self.account_rows.items():
-            row.set_selected(acc == account)
-
-        server = profile.get("server_name", "")
-        character = profile.get("character_name", "")
-        self._update_page_header()
-
-        self.entry_account.delete(0, "end")
-        self.entry_account.insert(0, profile.get("account", ""))
-        self.entry_password.delete(0, "end")  # nunca mostramos a senha salva
-        self.combo_server.set(server)
-        self.entry_character.delete(0, "end")
-        self.entry_character.insert(0, character)
+        self.selected_account = account
+        self.tab = "Contas"
+        for entry, valor in (
+            (self.entry_account, profile.get("account", "")),
+            (self.entry_password, ""),  # nunca mostramos a senha salva
+            (self.entry_server, profile.get("server_name", "")),
+            (self.entry_character, profile.get("character_name", "")),
+        ):
+            entry.delete(0, "end")
+            entry.insert(0, valor)
+        self.render()
 
     def _clear_form(self):
-        """Volta o painel direito pro modo padrao: pronto pra cadastrar uma
-        conta nova. Sai do modo edicao (se estiver nele)."""
+        """Formulario no modo padrao: pronto pra cadastrar uma conta nova."""
         self.editing_account = None
-        for row in self.account_rows.values():
-            row.set_selected(False)
-        self._update_page_header()
-        self.entry_account.delete(0, "end")
-        self.entry_password.delete(0, "end")
-        self.combo_server.set("")
-        self.entry_character.delete(0, "end")
+        self.tab = "Contas"
+        for entry in (self.entry_account, self.entry_password, self.entry_server, self.entry_character):
+            entry.delete(0, "end")
+        self.render()
         self.entry_account.focus_set()
 
     def _save_profile(self):
         account = self.entry_account.get().strip()
-        server_name = self.combo_server.get().strip()
+        server_name = self.entry_server.get().strip()
         character_name = self.entry_character.get().strip()
         password = self.entry_password.get()
 
@@ -964,18 +733,16 @@ class App(ctk.CTk):
         data = profiles.load_profiles()
         data = profiles.upsert_profile(data, account, server_name, character_name)
         profiles.save_profiles(data)
-
         if password:
             profiles.set_password(account, password)
-
         # a pasta do jogo vive no mesmo formulario, entao salva junto
         self._save_launcher_path()
 
-        self._refresh_profile_list()
-        # salvar (seja uma conta nova ou uma edicao) encerra o modo edicao e
-        # devolve o painel direito pro estado padrao, pronto pra cadastrar a
-        # proxima conta.
+        # salvar encerra o modo edicao; a conta salva fica selecionada,
+        # pronta pro "Iniciar Login"
         self._clear_form()
+        self.canvas.focus_set()
+        self._on_account_row_click(account)
         self._log_direct(f"Conta '{account}' salva.")
 
     def _remove_profile(self, account):
@@ -986,21 +753,15 @@ class App(ctk.CTk):
         profiles.save_profiles(data)
         if account == self.editing_account:
             self._clear_form()
-        self._refresh_profile_list()
+        if account == self.selected_account:
+            self.selected_account = None
+        self.render()
         self._log_direct(f"Conta '{account}' removida.")
-
-    def _update_running_state(self):
-        """Nao existe mais uma barra de status escrita: quem conta o que
-        esta rodando e a propria lista de contas (caixinha marcada +
-        bolinha branca). Aqui so ligamos/desligamos o "parar todas"."""
-        self.btn_stop.configure(state="normal" if self.running else "disabled")
 
     # ------------------------------------------------------------ launcher
 
     def _load_launcher_path(self):
-        # Vem do perfis.json (arquivo do usuario). Se estiver vazio, tenta o
-        # config.json -- caso de quem ja tinha o caminho configurado numa
-        # versao anterior, antes de ele mudar de lugar.
+        # Vem do perfis.json; se vazio, tenta o config.json (versoes antigas).
         caminho = profiles.get_game_path()
         if not caminho:
             caminho = (bot.load_json(bot.CONFIG_PATH).get("launcher_exe_path") or "").strip()
@@ -1026,44 +787,34 @@ class App(ctk.CTk):
         else:
             self._log_direct("Pasta do jogo removida -- o bot nao vai mais abrir o jogo sozinho.")
 
-    # ------------------------------------------------------------- bot
+    # ------------------------------------------------------------- login
 
     def _quick_start_account(self, account):
-        # Duplo clique numa linha inicia SO aquela conta na hora, sem
-        # precisar marcar a caixinha e depois clicar em "Iniciar" -- o
-        # atalho pra a acao mais comum (logar uma conta especifica).
-        data = profiles.load_profiles()
-        profile = next((p for p in profiles.list_profiles(data) if p.get("account") == account), None)
-        if not profile:
-            return
-        self._start_accounts([profile], confirm_multi=False)
+        # Duplo clique numa conta inicia o login so dela, na hora.
+        profile = self._profile(account)
+        if profile:
+            self._start_accounts([profile], confirm_multi=False)
 
     def _start_accounts(self, selected_profiles, confirm_multi=True):
         already_running = [p.get("account") for p in selected_profiles if p.get("account") in self.running]
         to_start = [p for p in selected_profiles if p.get("account") not in self.running]
-
         if already_running:
             self._log_direct(f"Ja esta rodando: {', '.join(already_running)}.")
-
         if not to_start:
             return
-
         if confirm_multi and len(to_start) > 1 and not messagebox.askyesno(
             "Logar varias contas ao mesmo tempo",
             f"Vou iniciar {len(to_start)} contas ao mesmo tempo: "
             f"{', '.join(p.get('account') for p in to_start)}.\n\n"
             "Isso so funciona se o jogo permitir varias copias do client.exe abertas "
-            "simultaneamente (uma por conta) -- se nao permitir, algumas contas podem "
-            "ficar sem conseguir abrir o jogo. Continuar?",
+            "simultaneamente (uma por conta). Continuar?",
         ):
             return
-
         if bot.STOP_FILE.exists():
             try:
                 bot.STOP_FILE.unlink()
             except OSError:
                 pass
-
         for profile in to_start:
             account = profile.get("account")
             stop_event = threading.Event()
@@ -1073,8 +824,7 @@ class App(ctk.CTk):
             self.running[account] = {"thread": thread, "stop_event": stop_event}
             self._log_direct(f"Iniciando '{account}'...")
             thread.start()
-
-        self._refresh_profile_list()
+        self.render()
 
     def _bot_thread_target(self, account, profile, stop_event):
         try:
@@ -1090,28 +840,139 @@ class App(ctk.CTk):
         except Exception:  # noqa: BLE001
             bot.log.exception("[%s] Erro inesperado no bot.", account)
         finally:
-            # IMPORTANTE: nao tocar em nada do Tkinter daqui. Esta funcao
-            # roda numa thread separada, e o Tkinter so pode ser usado pela
-            # thread principal -- chamar self.after() daqui trava a thread
-            # (foi exatamente o que aconteceu: a conta parava por dentro,
-            # mas a interface nunca ficava sabendo e continuava mostrando
-            # "rodando"). So avisamos por fila; quem mexe na tela e o
-            # _poll_log_queue, que ja roda na thread certa.
+            # NAO tocar no Tk daqui (thread separada): so avisa por fila;
+            # quem mexe na tela e o _poll_log_queue, na thread certa.
             self.finished_queue.put(account)
-
-    def _on_bot_finished(self, account):
-        self.running.pop(account, None)
-        self._refresh_profile_list()
 
     def _stop_bot(self):
         if not self.running:
             return
-        for account, info in self.running.items():
+        for info in self.running.values():
             info["stop_event"].set()
         self._log_direct(f"Parando {len(self.running)} conta(s)...")
-        self.btn_stop.configure(state="disabled")
 
-    # ------------------------------------------------------------- log
+    # --------------------------------------------------------------- cave
+
+    def _pid_for_nick(self, nick):
+        nick = (nick or "").strip().lower()
+        if not nick:
+            return None
+        for pid, nome in self.cave_online or []:
+            if nome and nome.lower() == nick:
+                return pid
+        return None
+
+    def _cave_state_for(self, profile):
+        """None se a deteccao ainda nao rodou, senao online/offline/entrando."""
+        if self.cave_online is None:
+            return None
+        pid = self._pid_for_nick(profile.get("character_name"))
+        if pid and pid in self.cave_runs:
+            return "entrando"
+        return "online" if pid else "offline"
+
+    def _selected_cave_pid(self):
+        p = self._profile(self.selected_account) if self.selected_account else None
+        return self._pid_for_nick(p.get("character_name")) if p else None
+
+    def _cave_status_text(self):
+        if self.cave_online is None:
+            return "procurando os jogos abertos..."
+        cadastrados = {
+            (q.get("character_name") or "").strip().lower()
+            for q in profiles.list_profiles(profiles.load_profiles())
+        }
+        extras = [n for _, n in self.cave_online if n and n.lower() not in cadastrados]
+        sem_resposta = sum(1 for _, n in self.cave_online if n is None)
+        partes = []
+        if extras:
+            partes.append("online sem cadastro: " + ", ".join(extras))
+        if sem_resposta:
+            partes.append(f"{sem_resposta} jogo(s) sem resposta (fila/minimizado)")
+        return "   ·   ".join(partes)
+
+    def _cave_detect_tick(self):
+        self._cave_detect()
+        self.after(4000, self._cave_detect_tick)
+
+    def _cave_detect(self):
+        """Le o nick de cada jogo aberto (numa thread: conectar num jogo novo
+        leva 0,5-2s) e manda o resultado pela fila."""
+        if self._cave_detecting:
+            return
+        self._cave_detecting = True
+        # Jogos tentando entrar na cave nao sao consultados: a deteccao
+        # disputaria a conexao com as tentativas e atrasaria os pedidos.
+        conhecidos = {pid: nome for pid, nome in (self.cave_online or []) if pid in self.cave_runs}
+
+        def trabalho():
+            import cave
+
+            try:
+                achados = cave.detectar_online(conhecidos)
+            except Exception:  # noqa: BLE001
+                bot.log.exception("Cave: erro ao procurar os jogos abertos.")
+                achados = []
+            self.cave_queue.put(("online", achados))
+
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    def _toggle_cave(self):
+        pid = self._selected_cave_pid()
+        if not pid:
+            return
+        conta = self.selected_account
+        run = self.cave_runs.get(pid)
+        if run:
+            run["stop_event"].set()
+            self._log_direct(f"[{conta}] Cave: parando...")
+            return
+        sigla, nome, numero = self._caves[self.cave_choice]
+        if not numero:
+            return
+        import cave
+
+        cave.marcar_recente(sigla)  # sobe pro topo do pop-up de caves
+        limite = float(bot.load_config().get("cave_limite_minutos", 10))
+        _, intervalo, rajada = next(v for v in CAVE_VELOCIDADES if v[0] == self.speed_choice)
+        stop_event = threading.Event()
+
+        def trabalho():
+            import cave
+
+            try:
+                cave.entrar(pid, numero, nome, stop_event, intervalo, limite, prefixo=conta, rajada=rajada)
+            except Exception:  # noqa: BLE001
+                bot.log.exception("Cave: erro inesperado.")
+            finally:
+                self.cave_queue.put(("fim", pid))
+
+        thread = threading.Thread(target=trabalho, daemon=True)
+        self.cave_runs[pid] = {
+            "thread": thread, "stop_event": stop_event, "tipo": "entrar", "cave": sigla, "account": conta,
+        }
+        thread.start()
+        self.render()
+
+    def _poll_cave_queue(self):
+        mudou = False
+        try:
+            while True:
+                tipo, dado = self.cave_queue.get_nowait()
+                if tipo == "online":
+                    self._cave_detecting = False
+                    if dado != self.cave_online:
+                        self.cave_online = dado
+                        mudou = True
+                elif tipo == "fim":
+                    self.cave_runs.pop(dado, None)
+                    mudou = True
+        except queue.Empty:
+            pass
+        if mudou:
+            self.render()
+
+    # ---------------------------------------------------------------- log
 
     def _log_direct(self, message):
         bot.log.info(message)
@@ -1129,8 +990,7 @@ class App(ctk.CTk):
         except queue.Empty:
             pass
 
-        # contas que terminaram (avisadas pelas threads via fila): tira da
-        # lista de rodando e atualiza a tela -- aqui, na thread certa.
+        # contas que terminaram (avisadas pelas threads via fila)
         finished = []
         try:
             while True:
@@ -1138,24 +998,17 @@ class App(ctk.CTk):
         except queue.Empty:
             pass
         for account in finished:
-            self._on_bot_finished(account)
+            self.running.pop(account, None)
+        if finished:
+            self.render()
 
+        self._poll_cave_queue()
         self.after(200, self._poll_log_queue)
 
     def _append_log(self, level, line):
-        tag = None
-        if level in ("ERROR", "CRITICAL"):
-            tag = "error"
-        elif level == "WARNING":
-            tag = "warning"
-        elif level == "INFO":
-            tag = "info"
-
+        tag = {"ERROR": "error", "CRITICAL": "error", "WARNING": "warning", "INFO": "info"}.get(level)
         self.log_text.configure(state="normal")
-        if tag:
-            self.log_text.insert("end", line + "\n", tag)
-        else:
-            self.log_text.insert("end", line + "\n")
+        self.log_text.insert("end", line + "\n", (tag,) if tag else ())
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
@@ -1168,7 +1021,24 @@ class App(ctk.CTk):
                 return
             for info in self.running.values():
                 info["stop_event"].set()
+        # Cave: para as tentativas e desfaz a conexao com cada jogo, pra nao
+        # deixar nada do bot rodando dentro deles depois de fechar.
+        for info in self.cave_runs.values():
+            info["stop_event"].set()
+        for info in list(self.cave_runs.values()):
+            info["thread"].join(timeout=3)
+        try:
+            import cliente_lua
+
+            cliente_lua.desconectar_todos()
+        except Exception:  # noqa: BLE001 - fechar o bot nunca pode travar aqui
+            pass
         self.destroy()
+
+
+def _rgba_hex(cor, alpha=1.0):
+    r, g, b = skin.rgb(cor)
+    return (r, g, b, int(255 * alpha))
 
 
 def main():
