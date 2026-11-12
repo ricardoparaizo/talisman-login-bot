@@ -286,8 +286,11 @@ class ClienteLua:
                 yield base, mbi.RegionSize
             addr = base + mbi.RegionSize
 
-    def _buscar(self, padrao, limite=64):
-        achados = []
+    def _buscar(self, padrao):
+        """Gera os enderecos onde `padrao` aparece, na ordem da memoria. E um
+        gerador de proposito: quem chama para no primeiro acerto valido, sem
+        varrer o resto (varrer tudo levava ~1,6s por jogo; parando cedo,
+        0,1-0,4s)."""
         for base, size in self._regioes():
             off = 0
             while off < size:
@@ -296,12 +299,9 @@ class ClienteLua:
                 if dados:
                     i = dados.find(padrao)
                     while i != -1:
-                        achados.append(base + off + i)
-                        if len(achados) >= limite:
-                            return achados
+                        yield base + off + i
                         i = dados.find(padrao, i + 1)
                 off += pedaco
-        return achados
 
     # ---------------------------------------------------- etapas
     def _conferir_versao(self):
@@ -317,15 +317,16 @@ class ClienteLua:
         """Objeto closure C da funcao global `nome`: string Lua do nome ->
         entrada da tabela de globais -> valor (tipo funcao)."""
         nb = nome.encode()
-        for a in self._buscar(nb + b"\x00", 64):
+        for a in self._buscar(nb + b"\x00"):
             hdr = self._ler(a - 16, 16)
             # TString: tt=4 no byte 4, tamanho em +12
             if not hdr or hdr[4] != 4 or struct.unpack_from("<I", hdr, 12)[0] != len(nb):
                 continue
             ts = a - 16
             # O nome e citado por milhares de funcoes Lua (constantes); a
-            # entrada da tabela de globais pode vir bem depois das primeiras.
-            for ref in self._buscar(struct.pack("<I", ts), 50000):
+            # entrada da tabela de globais pode vir bem depois das primeiras
+            # -- por isso nao ha limite, so para no primeiro acerto valido.
+            for ref in self._buscar(struct.pack("<I", ts)):
                 d = self._ler(ref - 8, 32)
                 if not d or len(d) != 32:
                     continue
@@ -473,6 +474,15 @@ class ClienteLua:
 # cave). Quem fecha tudo e a interface, ao sair (desconectar_todos).
 _conexoes = {}
 _conexoes_lock = threading.Lock()
+# Uma trava por jogo pra CONECTAR: conectar varre a memoria do jogo, e com
+# uma trava so, a conexao demorada de um jogo segurava todo mundo -- ate a
+# cave de uma conta ja conectada esperava.
+_travas_pid = {}
+
+
+def _trava_do_pid(pid):
+    with _conexoes_lock:
+        return _travas_pid.setdefault(pid, threading.Lock())
 
 
 def obter(pid):
@@ -481,9 +491,15 @@ def obter(pid):
         c = _conexoes.get(pid)
         if c is not None and c.h is not None:
             return c
+    with _trava_do_pid(pid):
+        with _conexoes_lock:  # outra thread pode ter conectado enquanto esperavamos
+            c = _conexoes.get(pid)
+            if c is not None and c.h is not None:
+                return c
         c = ClienteLua(pid)
         c.conectar()
-        _conexoes[pid] = c
+        with _conexoes_lock:
+            _conexoes[pid] = c
         return c
 
 

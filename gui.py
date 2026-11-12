@@ -127,6 +127,9 @@ class App(tk.Tk):
         # sem resposta); None = ainda nao detectou
         self.cave_online = None
         self._cave_detecting = False
+        # Conta cujo "Entrar" foi clicado antes do jogo dela ser encontrado:
+        # a cave comeca sozinha assim que a deteccao achar (ver _toggle_cave).
+        self._cave_pendente = None
         import cave
 
         self._caves = {cave.rotulo(*c): c for c in cave.lista_caves()}
@@ -545,8 +548,18 @@ class App(tk.Tk):
         k.divider(x0, x1, y)
         y += s(18)
         run = self.cave_runs.get(pid) if pid else None
-        k.button(x0, y, s(150), s(40), "Parar" if run else "Entrar", self._toggle_cave,
-                 style="white", enabled=bool(pid), size=14)
+        pendente = bool(self._cave_pendente) and self._cave_pendente == self.selected_account
+        if run:
+            rotulo, ativo = "Parar", True
+        elif pendente:
+            rotulo, ativo = "Procurando o jogo...", True   # clicar de novo cancela
+        else:
+            # Antes da deteccao terminar ainda nao se sabe o jogo da conta --
+            # o botao fica ativo e o clique espera a deteccao (nao e ignorado).
+            nick = (prof or {}).get("character_name", "").strip() if prof else ""
+            rotulo, ativo = "Entrar", bool(pid) or (bool(nick) and self.cave_online is None)
+        k.button(x0, y, s(200) if pendente else s(150), s(40), rotulo, self._toggle_cave,
+                 style="white", enabled=ativo, size=14)
         return y + s(40)
 
     def _draw_log(self, x0, y0, x1, y1):
@@ -919,9 +932,24 @@ class App(tk.Tk):
 
     def _toggle_cave(self):
         pid = self._selected_cave_pid()
-        if not pid:
-            return
         conta = self.selected_account
+        if not pid:
+            # O jogo da conta ainda nao foi encontrado (o bot acabou de abrir e
+            # a deteccao esta conectando nos jogos). Antes, o clique era
+            # ignorado em silencio e parecia que o bot "demorava a comecar".
+            # Agora fica pendente e comeca sozinho assim que achar.
+            prof = self._profile(conta) if conta else None
+            if not prof or not (prof.get("character_name") or "").strip():
+                return
+            if self._cave_pendente == conta:
+                self._cave_pendente = None
+                self._log_direct(f"[{conta}] Cave: cancelado.")
+            else:
+                self._cave_pendente = conta
+                self._log_direct(f"[{conta}] Cave: procurando o jogo dessa conta -- comeca sozinho assim que achar.")
+                self._cave_detect()
+            self.render()
+            return
         run = self.cave_runs.get(pid)
         if run:
             run["stop_event"].set()
@@ -956,11 +984,13 @@ class App(tk.Tk):
 
     def _poll_cave_queue(self):
         mudou = False
+        detectou = False
         try:
             while True:
                 tipo, dado = self.cave_queue.get_nowait()
                 if tipo == "online":
                     self._cave_detecting = False
+                    detectou = True
                     if dado != self.cave_online:
                         self.cave_online = dado
                         mudou = True
@@ -969,6 +999,18 @@ class App(tk.Tk):
                     mudou = True
         except queue.Empty:
             pass
+        if detectou and self._cave_pendente:
+            conta = self._cave_pendente
+            self._cave_pendente = None
+            if conta == self.selected_account and self._selected_cave_pid():
+                self._toggle_cave()  # achou o jogo: comeca a cave agora
+                return
+            nick = ((self._profile(conta) or {}).get("character_name") or "").strip()
+            self._log_direct(
+                f"[{conta}] Cave: nao achei o jogo dessa conta -- confira se ela esta logada e se o "
+                f"nick no cadastro ({nick or 'vazio'}) e o mesmo do personagem."
+            )
+            mudou = True
         if mudou:
             self.render()
 
