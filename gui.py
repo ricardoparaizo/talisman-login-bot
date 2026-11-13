@@ -62,14 +62,15 @@ KNOWN_SERVERS = [
     "Light in the Darkness",
 ]
 
-# Rotulo -> (pausa entre voltas em segundos, pedidos por volta). A interface
-# do jogo passa pelo gancho ~3x por segundo (medido), entao o que mais
-# acelera e mandar varios pedidos por volta.
+# Rotulo -> (pausa entre voltas em segundos, alvo de pedidos por segundo). A
+# interface do jogo passa pelo gancho so ~5-6x por segundo, entao o bot manda
+# varios pedidos por passagem e recalcula quantos a cada volta pra bater o
+# alvo (ver cave.entrar).
 CAVE_VELOCIDADES = [
-    ("Maximo (~30 por segundo)", 0.0, 10),
-    ("Muito rapido (~15 por segundo)", 0.0, 5),
-    ("Rapido (~6 por segundo)", 0.0, 2),
-    ("Normal (~3 por segundo)", 0.0, 1),
+    ("Maximo (~200 por segundo)", 0.0, 200),
+    ("Muito rapido (~50 por segundo)", 0.0, 50),
+    ("Rapido (~15 por segundo)", 0.0, 15),
+    ("Normal (~5 por segundo)", 0.0, 5),
 ]
 
 TABS = ["Contas", "Entrar Cave"]
@@ -962,14 +963,15 @@ class App(tk.Tk):
 
         cave.marcar_recente(sigla)  # sobe pro topo do pop-up de caves
         limite = float(bot.load_config().get("cave_limite_minutos", 10))
-        _, intervalo, rajada = next(v for v in CAVE_VELOCIDADES if v[0] == self.speed_choice)
+        _, intervalo, alvo = next(v for v in CAVE_VELOCIDADES if v[0] == self.speed_choice)
         stop_event = threading.Event()
 
         def trabalho():
             import cave
 
             try:
-                cave.entrar(pid, numero, nome, stop_event, intervalo, limite, prefixo=conta, rajada=rajada)
+                cave.entrar(pid, numero, nome, stop_event, intervalo, limite, prefixo=conta,
+                            rajada=max(1, alvo // 5), alvo_por_segundo=alvo)
             except Exception:  # noqa: BLE001
                 bot.log.exception("Cave: erro inesperado.")
             finally:

@@ -174,12 +174,22 @@ def detectar_online(conhecidos=None):
 
 
 # --------------------------------------------------------------- entrar --
+RAJADA_MAX = 120  # teto de pedidos numa passagem so (seguranca contra um calculo louco)
+
+
 def entrar(pid, numero, nome_cave, stop_event, intervalo=0.2, limite_minutos=10.0, prefixo="",
-           rajada=1):
+           rajada=1, alvo_por_segundo=None):
     """Repete o pedido de entrar na cave `numero` ate entrar, morrer, estourar
     o tempo ou `stop_event`. Manda `rajada` pedidos por volta, com
-    `intervalo` segundos de pausa entre as voltas. Retorna True se entrou."""
+    `intervalo` segundos de pausa entre as voltas. Retorna True se entrou.
+
+    `alvo_por_segundo`: em vez de uma rajada fixa, mira nesse ritmo. O gancho
+    so roda quando a interface do jogo passa por ele (~5-6x/s, mas varia com
+    foco, cenario e PC), entao o tamanho da rajada e recalculado a cada volta
+    pelo tempo medio entre as voltas: rajada = alvo x tempo_entre_voltas."""
     rajada = max(1, int(rajada))
+    tempo_volta = None   # media (movel) do tempo entre uma volta e a proxima
+    ultima_volta = None
     p = f"[{prefixo}] " if prefixo else ""
     try:
         c = cliente_lua.obter(pid)
@@ -232,7 +242,14 @@ def entrar(pid, numero, nome_cave, stop_event, intervalo=0.2, limite_minutos=10.
             tentativas += rajada
             if cena_inicial is None:
                 cena_inicial = int(float(r.split(":", 1)[1]))
-                codigo = _LUA_TENTAR % {"cena": cena_inicial, "id": numero, "rajada": rajada}
+            # Ajusta a rajada pra bater o alvo de pedidos por segundo.
+            agora = time.time()
+            if alvo_por_segundo and ultima_volta is not None:
+                dt = agora - ultima_volta
+                tempo_volta = dt if tempo_volta is None else tempo_volta * 0.8 + dt * 0.2
+                rajada = max(1, min(RAJADA_MAX, round(alvo_por_segundo * tempo_volta)))
+            ultima_volta = agora
+            codigo = _LUA_TENTAR % {"cena": cena_inicial, "id": numero, "rajada": rajada}
             if tentativas >= proximo_log:
                 decorrido = max(0.001, time.time() - inicio)
                 log.info("%sCave: %d pedidos em %.0fs (%.1f por segundo), ainda sem vaga...",
