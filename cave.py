@@ -8,22 +8,28 @@ Como o jogo entra numa cave:
     maximum amount limit. Please try later again." e nada acontece. Por isso
     o jeito manual e ficar clicando no NPC e no link varias vezes.
 
+    O servidor so aceita esse pedido de quem CONVERSOU com o NPC da cave
+    (abriu o dialogo dele). Sem isso, ignora em silencio -- nem a mensagem de
+    "lotado" aparece. E o personagem precisa estar perto do NPC.
+
 O que o bot faz:
-    Conecta no client (cliente_lua.py) e repete esse mesmo pedido em
-    intervalos curtos, sem precisar do dialogo aberto, ate o mapa do
-    personagem mudar (entrou). Para tambem se o personagem morrer, se passar
-    do tempo limite, ou se voce mandar parar. O personagem precisa estar
-    perto do NPC da cave -- o servidor confere a distancia, igual no clique.
+    1. Conversa com o NPC da cave sozinho (a mesma funcao que o guia do
+       proprio jogo usa pra interagir com um NPC). Se o NPC nao estiver perto,
+       pede pro usuario clicar nele e espera o dialogo abrir.
+    2. Liga o envio por quadro (cliente_lua._Repetidor): de dentro do laco
+       principal do jogo, 1 pedido a cada 200 ms, com espacamento exato.
+    3. Acompanha o mapa do personagem e desliga quando mudar (entrou), se o
+       personagem morrer, se passar do tempo limite ou se mandar parar.
 
 Numero de cada cave:
     Ficam em CAVES. Se o jogo ganhar uma cave nova, o numero dela aparece no
     link "RequestIntoEctype:...?id=N" do dialogo do NPC (da pra ler da
-    memoria do jogo depois de abrir o dialogo) -- e so acrescentar aqui.
+    memoria do jogo depois de abrir o dialogo) -- e so acrescentar aqui, com
+    o id do NPC em NPC_DAS_CAVES.
 """
 
 import json
 import logging
-import random
 import time
 
 import cliente_lua
@@ -65,28 +71,21 @@ CAVES = [
     ("DR", "Devil Realm", 33),
 ]
 
-# Uma volta do loop, numa chamada so: confere o estado do personagem e, se
-# ainda estiver no mesmo mapa, manda o pedido de entrar. Confere a camada do
-# mundo ANTES de chamar as funcoes do jogo: fora dele (tela de login,
-# loading) elas podem nao existir.
-#   %(cena)d   = mapa onde o personagem estava ao comecar (-1 na 1a volta:
-#                ai a propria volta descobre o mapa e ja manda o pedido)
-#   %(id)d     = numero da cave
-#   %(rajada)d = quantos pedidos mandar de uma vez nesta volta. Cada volta
-#                espera a interface do jogo passar pelo gancho de novo
-#                (~0,1s), entao mandar varios por volta e o que multiplica
-#                os pedidos por segundo.
-_LUA_TENTAR = """
-local w = uiGetglobal("layWorld")
-if not w or (w.getVisible and not w:getVisible()) then return "FORA" end
-if uiUserIsDead() then return "MORTO" end
-local c = uiUserGetSceneResID()
-if %(cena)d ~= -1 and c ~= %(cena)d then return "ENTROU:" .. tostring(c) end
-for i = 1, %(rajada)d do
-  uiPost("RequestIntoEctype:cave?id=%(id)d")
-end
-return "ENVIADO:" .. tostring(c)
-"""
+# Numero da cave -> id (na tabela do jogo) do NPC que da entrada nela. E o
+# numero da chave de texto do link do dialogo dele ("npctalk4848_02_19" ->
+# 4848). Confirmado ao vivo com a Spider Catacomb (Spider Catacomb Child).
+NPC_DAS_CAVES = {
+    2: 165, 3: 278, 4: 4334, 5: 404, 6: 3129, 7: 3324, 8: 4484, 10: 4669,
+    13: 4777, 15: 4848, 16: 4938, 18: 5146, 19: 41, 20: 5543, 22: 5677, 23: 5694,
+    30: 6511, 33: 11096, 34: 8066, 44: 8848, 45: 1742, 73: 1927, 74: 1927,
+}
+
+INTERVALO_MS = 200  # 1 pedido a cada 200 ms (~4,5-5 por segundo)
+
+
+def npc_da_cave(numero):
+    return NPC_DAS_CAVES.get(numero)
+
 
 _LUA_NOME = """
 local l = uiGetglobal("layWorld.frmSelfEx.lbName")
@@ -173,92 +172,175 @@ def detectar_online(conhecidos=None):
     return [(pid, conhecidos[pid] if pid in conhecidos else nome_do_personagem(pid)) for pid in pids]
 
 
+# ------------------------------------------------------- conversa c/ NPC --
+_LUA_DIALOGO_ABERTO = """
+local d = uiGetglobal("layWorld.frmDialogerEx")
+if d and d:getVisible() then return "SIM" end
+return "NAO"
+"""
+
+# Conversa com o NPC sem clique: e a funcao que o guia do proprio jogo usa
+# (chamada com um numero so, o id do NPC). Ela acha o NPC perto com esse id e
+# manda ao servidor o mesmo evento "interagir" do clique; se nao houver NPC
+# com esse id por perto, nao faz nada (visto no codigo do client).
+_LUA_FALAR_NPC = 'uiUserHelpInteractiveByClassId(%(npc)d); return "ok"'
+
+
+def _falar_com_npc(c, stop_event, p, numero):
+    """Tenta abrir o dialogo do NPC da cave sozinho. True se abriu."""
+    npc = npc_da_cave(numero)
+    if not npc:
+        return False
+    try:
+        c.executar(_LUA_FALAR_NPC % {"npc": npc}, timeout=3.0)
+    except cliente_lua.ErroCliente as exc:
+        log.debug("%sCave: nao consegui falar com o NPC %d: %s", p, npc, exc)
+        return False
+    fim = time.time() + 3.0
+    while time.time() < fim and not stop_event.is_set():
+        try:
+            if c.executar(_LUA_DIALOGO_ABERTO, timeout=2.0) == "SIM":
+                log.info("%sCave: conversei com o NPC da cave -- dialogo aberto.", p)
+                return True
+        except cliente_lua.ErroCliente:
+            pass
+        stop_event.wait(0.1)
+    log.info("%sCave: o NPC da cave nao respondeu (longe demais?).", p)
+    return False
+
+
+def _esperar_conversa_npc(c, stop_event, p, numero, espera_max=120.0):
+    """True quando o dialogo do NPC esta aberto (ja estava, o bot abriu, ou o
+    usuario clicou). False se o usuario parou ou passou `espera_max` s."""
+    try:
+        if c.executar(_LUA_DIALOGO_ABERTO, timeout=3.0) == "SIM":
+            return True
+    except cliente_lua.ErroCliente:
+        return True  # nao deu pra conferir: segue
+    if _falar_com_npc(c, stop_event, p, numero):
+        return True
+    log.warning("%sCave: CLIQUE NO NPC DA CAVE uma vez (abra o dialogo dele) -- sem conversar com o "
+                "NPC o servidor ignora os pedidos. Comeco assim que o dialogo abrir...", p)
+    fim = time.time() + espera_max
+    proximo_aviso = time.time() + 15
+    while time.time() < fim:
+        if stop_event.wait(0.4):
+            return False
+        try:
+            if c.executar(_LUA_DIALOGO_ABERTO, timeout=2.0) == "SIM":
+                log.info("%sCave: dialogo do NPC aberto -- comecando.", p)
+                return True
+        except cliente_lua.ErroCliente:
+            continue
+        if time.time() >= proximo_aviso:
+            log.info("%sCave: ainda esperando voce clicar no NPC da cave...", p)
+            proximo_aviso = time.time() + 15
+    log.error("%sCave: o dialogo do NPC nao abriu em %.0f s; parando.", p, espera_max)
+    return False
+
+
 # --------------------------------------------------------------- entrar --
-RAJADA_MAX = 120  # teto de pedidos numa passagem so (seguranca contra um calculo louco)
+# Roda a cada INTERVALO_MS de dentro do laco do jogo (gancho por quadro); o
+# proprio trecho confere se pode mandar o pedido.
+_LUA_ENVIO = """
+pcall(function()
+  local w = uiGetglobal("layWorld")
+  if not w or (w.getVisible and not w:getVisible()) then return end
+  if uiUserIsDead() then return end
+  if uiUserGetSceneResID() ~= %(cena)d then return end
+  uiPost("RequestIntoEctype:cave?id=%(id)d")
+  __bot_q_n = (__bot_q_n or 0) + 1
+end)
+"""
+
+_LUA_ESTADO = """
+local w = uiGetglobal("layWorld")
+if not w or (w.getVisible and not w:getVisible()) then return "FORA" end
+if uiUserIsDead() then return "MORTO" end
+return "EST:" .. tostring(uiUserGetSceneResID()) .. ":" .. tostring(__bot_q_n or 0)
+"""
 
 
-def entrar(pid, numero, nome_cave, stop_event, intervalo=0.2, limite_minutos=10.0, prefixo="",
-           rajada=1, alvo_por_segundo=None):
-    """Repete o pedido de entrar na cave `numero` ate entrar, morrer, estourar
-    o tempo ou `stop_event`. Manda `rajada` pedidos por volta, com
-    `intervalo` segundos de pausa entre as voltas. Retorna True se entrou.
-
-    `alvo_por_segundo`: em vez de uma rajada fixa, mira nesse ritmo. O gancho
-    so roda quando a interface do jogo passa por ele (~5-6x/s, mas varia com
-    foco, cenario e PC), entao o tamanho da rajada e recalculado a cada volta
-    pelo tempo medio entre as voltas: rajada = alvo x tempo_entre_voltas."""
-    rajada = max(1, int(rajada))
-    tempo_volta = None   # media (movel) do tempo entre uma volta e a proxima
-    ultima_volta = None
+def entrar(pid, numero, nome_cave, stop_event, limite_minutos=10.0, prefixo="", intervalo_ms=INTERVALO_MS):
+    """Conversa com o NPC da cave e repete o pedido de entrar (1 a cada
+    `intervalo_ms`) ate entrar, morrer, estourar o tempo ou `stop_event`.
+    Retorna True se entrou."""
     p = f"[{prefixo}] " if prefixo else ""
     try:
         c = cliente_lua.obter(pid)
+        r = c.executar(_LUA_ESTADO, timeout=3.0)
     except cliente_lua.ErroCliente as exc:
-        log.error("%sCave: nao consegui conectar no jogo: %s", p, exc)
+        log.error("%sCave: nao consegui falar com o jogo: %s", p, exc)
+        return False
+    if r == "MORTO":
+        log.warning("%sCave: o personagem esta morto.", p)
+        return False
+    if not r.startswith("EST:"):
+        log.warning("%sCave: o personagem nao esta no mundo (tela de login/loading).", p)
+        return False
+    cena_inicial = int(float(r.split(":")[1]))
+    if not _esperar_conversa_npc(c, stop_event, p, numero):
         return False
 
-    log.info("%sCave: tentando entrar em %s (n. %d)...", p, nome_cave, numero)
+    envio = _LUA_ENVIO % {"cena": cena_inicial, "id": numero}
+    rep = c.repetidor()
+    try:
+        c.executar("__bot_q_n = 0", timeout=3.0)
+        rep.iniciar(envio, intervalo_ms)
+    except cliente_lua.ErroCliente as exc:
+        log.error("%sCave: nao consegui ligar o envio: %s", p, exc)
+        return False
+    log.info("%sCave: tentando entrar em %s (n. %d), 1 pedido a cada %d ms...",
+             p, nome_cave, numero, intervalo_ms)
+
     inicio = time.time()
     tentativas = 0
+    proximo_log = inicio + 10
     carregando_desde = None
-    cena_inicial = None
-    # A 1a volta ja manda o pedido e descobre o mapa atual ao mesmo tempo.
-    codigo = _LUA_TENTAR % {"cena": -1, "id": numero, "rajada": rajada}
-    proximo_log = 1
-
-    while not stop_event.is_set():
-        if limite_minutos and time.time() - inicio > limite_minutos * 60:
-            log.warning("%sCave: desisti depois de %.0f min (%d tentativas).", p, limite_minutos, tentativas)
-            return False
-        try:
-            r = c.executar(codigo, timeout=2.0)
-            carregando_desde = None
-        except cliente_lua.ErroCliente as exc:
-            # Tela de loading para a interface do jogo por alguns segundos --
-            # normalmente e justamente a entrada na cave acontecendo.
-            if carregando_desde is None:
-                carregando_desde = time.time()
-                if cena_inicial is None:
-                    log.warning("%sCave: o jogo nao responde -- ele nao pode estar minimizado.", p)
-                else:
-                    log.info("%sCave: o jogo parou de responder (carregando a cave?)...", p)
-            elif time.time() - carregando_desde > 60:
-                log.error("%sCave: o jogo nao responde ha 1 min, parando: %s", p, exc)
+    try:
+        while not stop_event.is_set():
+            if limite_minutos and time.time() - inicio > limite_minutos * 60:
+                log.warning("%sCave: desisti depois de %.0f min (%d pedidos).", p, limite_minutos, tentativas)
                 return False
-            stop_event.wait(0.5)
-            continue
+            try:
+                rep.renovar()
+                if not rep.ligado():
+                    log.warning("%sCave: o envio desligou sozinho; religando.", p)
+                    rep.iniciar(envio, intervalo_ms)
+                if rep.status() != 0:
+                    log.error("%sCave: erro no trecho de Lua do envio (status %d).", p, rep.status())
+                    return False
+                r = c.executar(_LUA_ESTADO, timeout=2.0)
+                carregando_desde = None
+            except cliente_lua.ErroCliente as exc:
+                # Tela de loading para a interface do jogo por alguns segundos
+                # -- normalmente e justamente a entrada na cave acontecendo.
+                if carregando_desde is None:
+                    carregando_desde = time.time()
+                    log.info("%sCave: o jogo parou de responder (carregando a cave?)...", p)
+                elif time.time() - carregando_desde > 60:
+                    log.error("%sCave: o jogo nao responde ha 1 min, parando: %s", p, exc)
+                    return False
+                stop_event.wait(0.5)
+                continue
 
-        if r.startswith("ENTROU"):
-            log.info("%sCave: entrou em %s depois de %d tentativas (%.0fs).",
-                     p, nome_cave, tentativas, time.time() - inicio)
-            return True
-        if r == "MORTO":
-            log.warning("%sCave: o personagem esta morto, parando.", p)
-            return False
-        if r == "FORA" and cena_inicial is None:
-            log.warning("%sCave: o personagem nao esta no mundo (tela de login/loading).", p)
-            return False
-        if r.startswith("ENVIADO"):
-            tentativas += rajada
-            if cena_inicial is None:
-                cena_inicial = int(float(r.split(":", 1)[1]))
-            # Ajusta a rajada pra bater o alvo de pedidos por segundo.
-            agora = time.time()
-            if alvo_por_segundo and ultima_volta is not None:
-                dt = agora - ultima_volta
-                tempo_volta = dt if tempo_volta is None else tempo_volta * 0.8 + dt * 0.2
-                rajada = max(1, min(RAJADA_MAX, round(alvo_por_segundo * tempo_volta)))
-            ultima_volta = agora
-            codigo = _LUA_TENTAR % {"cena": cena_inicial, "id": numero, "rajada": rajada}
-            if tentativas >= proximo_log:
+            if r == "MORTO":
+                log.warning("%sCave: o personagem esta morto, parando.", p)
+                return False
+            if r.startswith("EST:"):
+                _, cena_txt, n_txt = r.split(":")
+                tentativas = int(float(n_txt))
+                if int(float(cena_txt)) != cena_inicial:
+                    log.info("%sCave: entrou em %s depois de %d pedidos (%.0fs).",
+                             p, nome_cave, tentativas, time.time() - inicio)
+                    return True
+            if time.time() >= proximo_log:
                 decorrido = max(0.001, time.time() - inicio)
                 log.info("%sCave: %d pedidos em %.0fs (%.1f por segundo), ainda sem vaga...",
                          p, tentativas, decorrido, tentativas / decorrido)
-                # 1o pedido, depois a cada ~10s de tentativas no ritmo atual
-                proximo_log = tentativas + max(50, int(tentativas / decorrido * 10))
-        # "FORA" depois de comecar: entre mapas -- so espera a proxima volta.
-        if intervalo > 0:
-            stop_event.wait(intervalo * random.uniform(0.85, 1.15))
-
-    log.info("%sCave: parado (%d tentativas).", p, tentativas)
-    return False
+                proximo_log = time.time() + 10
+            stop_event.wait(0.5)
+        log.info("%sCave: parado (%d pedidos).", p, tentativas)
+        return False
+    finally:
+        rep.parar()

@@ -47,8 +47,8 @@ NEW_ACCOUNT_HINT = (
 )
 CAVE_HINT = (
     "Selecione uma conta online na lista da esquerda, escolha a cave e clique em Entrar. Com o "
-    "personagem perto do NPC da cave, o bot repete o pedido de entrar ate conseguir. O jogo nao "
-    "pode estar minimizado."
+    "personagem perto do NPC da cave, o bot conversa com ele sozinho e repete o pedido de entrar "
+    "ate conseguir. O jogo nao pode estar minimizado."
 )
 
 ICON_ICO = RESOURCE_DIR / "icon.ico"
@@ -60,17 +60,6 @@ KNOWN_SERVERS = [
     "Sky Ice (GSM&BI)",
     "All Stars",
     "Light in the Darkness",
-]
-
-# Rotulo -> (pausa entre voltas em segundos, alvo de pedidos por segundo). A
-# interface do jogo passa pelo gancho so ~5-6x por segundo, entao o bot manda
-# varios pedidos por passagem e recalcula quantos a cada volta pra bater o
-# alvo (ver cave.entrar).
-CAVE_VELOCIDADES = [
-    ("Maximo (~200 por segundo)", 0.0, 200),
-    ("Muito rapido (~50 por segundo)", 0.0, 50),
-    ("Rapido (~15 por segundo)", 0.0, 15),
-    ("Normal (~5 por segundo)", 0.0, 5),
 ]
 
 TABS = ["Contas", "Entrar Cave"]
@@ -140,7 +129,6 @@ class App(tk.Tk):
             (r for r, c in self._caves.items() if ultimas and c[0] == ultimas[0]),
             next(iter(self._caves)),
         )
-        self.speed_choice = CAVE_VELOCIDADES[0][0]
 
         # -- desenho --
         self._bg_size = None
@@ -537,13 +525,8 @@ class App(tk.Tk):
             k.text(x0 + s(2), y, status, skin.TYPE["footnote"], color=skin.TEXT_DIM)
         y += s(22)
 
-        col = (cw - s(18)) / 2
-        xr = x0 + col + s(18)
         self._label(x0, y, "Cave")
-        self._label(xr, y, "Velocidade")
-        k.popup(x0, y + s(20), col, fh, self.cave_choice, lambda: self._menu_cave(x0, y + s(20) + fh + s(4)))
-        k.popup(xr, y + s(20), col, fh, self.speed_choice,
-                lambda: self._menu_velocidade(xr, y + s(20) + fh + s(4)))
+        k.popup(x0, y + s(20), cw, fh, self.cave_choice, lambda: self._menu_cave(x0, y + s(20) + fh + s(4)))
         y += s(20) + fh + s(22)
 
         k.divider(x0, x1, y)
@@ -607,14 +590,6 @@ class App(tk.Tk):
             itens += [None, ("Todas as caves", None)]
         itens += [(r, lambda r=r: escolher(r)) for r in self._caves]
         self._menu_at(itens, x, y, checked=self.cave_choice)
-
-    def _menu_velocidade(self, x, y):
-        def escolher(rotulo):
-            self.speed_choice = rotulo
-            self.render()
-
-        self._menu_at([(r, lambda r=r: escolher(r)) for r, _, _ in CAVE_VELOCIDADES], x, y,
-                      checked=self.speed_choice)
 
     def _show_row_menu(self, account, event):
         """Menu do botao direito em cima de uma conta. "Editar" e o UNICO
@@ -963,15 +938,13 @@ class App(tk.Tk):
 
         cave.marcar_recente(sigla)  # sobe pro topo do pop-up de caves
         limite = float(bot.load_config().get("cave_limite_minutos", 10))
-        _, intervalo, alvo = next(v for v in CAVE_VELOCIDADES if v[0] == self.speed_choice)
         stop_event = threading.Event()
 
         def trabalho():
             import cave
 
             try:
-                cave.entrar(pid, numero, nome, stop_event, intervalo, limite, prefixo=conta,
-                            rajada=max(1, alvo // 5), alvo_por_segundo=alvo)
+                cave.entrar(pid, numero, nome, stop_event, limite, prefixo=conta)
             except Exception:  # noqa: BLE001
                 bot.log.exception("Cave: erro inesperado.")
             finally:

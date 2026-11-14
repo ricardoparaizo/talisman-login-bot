@@ -254,6 +254,13 @@ class ClienteLua:
         # Trechos de Lua pra rodar antes de desconectar, desfazendo o que o
         # bot tiver mudado na interface do jogo (ex: o modo "Aprender").
         self.limpezas = {}
+        self._repetidor = None
+
+    def repetidor(self):
+        """Repeticao por quadro (ritmo exato) -- ver _Repetidor."""
+        if self._repetidor is None:
+            self._repetidor = _Repetidor(self)
+        return self._repetidor
 
     # ---------------------------------------------------- memoria crua
     def _ler(self, addr, size):
@@ -397,6 +404,8 @@ class ClienteLua:
         liberar agora derrubaria o client. Sao 8 KB, somem quando o jogo fecha."""
         if self.h is None:
             return
+        if self._repetidor is not None:
+            self._repetidor.remover()
         for nome, codigo in list(self.limpezas.items()):
             try:
                 self.executar(codigo, timeout=1.0)
@@ -467,6 +476,238 @@ class ClienteLua:
         if res.startswith("ERR:"):
             raise ErroCliente(f"erro de Lua: {res[4:]}")
         return res[3:] if res.startswith("OK:") else res
+
+
+# ======================================================= gancho por quadro ==
+# O gancho do uiGetglobal so roda quando a interface chama essa funcao (3-6x
+# por segundo, variando). Pra repetir algo com ritmo EXATO (ex: 1 pedido a
+# cada 200 ms), existe um segundo gancho, no laco
+# principal do jogo: depois de tratar as mensagens do Windows, todo quadro o
+# jogo chama timeGetTime em ADDR_QUADRO_CALL (call rel32 de 5 bytes). O bot
+# troca o destino desse call pelo trecho abaixo, que chama o timeGetTime
+# original e, se estiver ligado e ja passou o intervalo, roda um trecho de
+# Lua (lua_dobuffer, com o L guardado pelo gancho principal).
+#
+# Seguranca:
+#   - so instala se os 5 bytes forem exatamente os originais (ou um gancho
+#     nosso de uma execucao anterior); se outro programa mexeu, nao toca;
+#   - a troca dos 4 bytes e feita com o jogo pausado (NtSuspendProcess);
+#   - "prazo de vida": se o bot nao renovar o prazo a cada poucos segundos
+#     (fechou, travou), o proprio gancho desliga a repeticao;
+#   - ao desconectar, os bytes originais voltam.
+ADDR_QUADRO_CALL = 0x00B281F8     # call 0x009F26F0 (jmp [timeGetTime]) no laco principal
+ADDR_TIMEGETTIME_THUNK = 0x009F26F0
+QUADRO_ORIGINAL = bytes.fromhex("e8f3a4ecff")
+ASSINATURAS[ADDR_QUADRO_CALL - 4] = bytes.fromhex("85c075cc")  # test eax,eax; jne (antes do call)
+
+TAM_BLOCO_Q = 0x1000
+Q_ON = 0x300          # 1 = repetindo
+Q_INTERVALO = 0x304   # ms entre execucoes
+Q_ULTIMO = 0x308      # timeGetTime da ultima execucao
+Q_CONTA = 0x30C       # quantas vezes o trecho rodou
+Q_LEN = 0x310
+Q_STATUS = 0x314      # retorno do ultimo lua_dobuffer
+Q_L = 0x318           # lua_State (copiado do gancho principal)
+Q_AGORA = 0x31C       # timeGetTime do ultimo quadro
+Q_PRAZO = 0x324       # depois desse timeGetTime, desliga sozinho
+Q_MAGIC = 0x330
+Q_NOME = 0x340
+Q_BUF = 0x400
+TAM_Q_BUF = TAM_BLOCO_Q - Q_BUF
+MAGIC_Q = b"BOTFRM01"
+PRAZO_MS = 3000
+
+
+def montar_gancho_quadro(base):
+    """Equivale a:
+        DWORD gancho(void) {
+            DWORD t = timeGetTime();
+            AGORA = t;
+            if (ON == 1) {
+                if (t > PRAZO) { ON = 0; return t; }
+                if (t - ULTIMO >= INTERVALO && L) {
+                    ULTIMO = t;
+                    int top = lua_gettop(L);
+                    STATUS = lua_dobuffer(L, BUF, LEN, "=botq");
+                    lua_settop(L, top);
+                    CONTA++;
+                }
+            }
+            return t;
+        }
+    """
+    d = lambda off: struct.pack("<I", base + off)  # noqa: E731
+    a = _Asm(base)
+    a.call_abs(ADDR_TIMEGETTIME_THUNK)                   # eax = timeGetTime()
+    a.emit(b"\xA3", d(Q_AGORA))                          # mov [AGORA], eax
+    a.emit(b"\x83\x3D", d(Q_ON), b"\x01")                # cmp dword [ON], 1
+    a.jcc32(0x75, "fim")                                 # jne fim
+    a.emit(b"\x3B\x05", d(Q_PRAZO))                      # cmp eax, [PRAZO]
+    a.jcc8(0x76, "no_prazo")                             # jbe no_prazo
+    a.emit(b"\xC7\x05", d(Q_ON), struct.pack("<I", 0))   # mov dword [ON], 0
+    a.emit(b"\xC3")                                      # ret (eax = t)
+    a.label("no_prazo")
+    a.emit(b"\x89\xC1")                                  # mov ecx, eax
+    a.emit(b"\x2B\x0D", d(Q_ULTIMO))                     # sub ecx, [ULTIMO]
+    a.emit(b"\x3B\x0D", d(Q_INTERVALO))                  # cmp ecx, [INTERVALO]
+    a.jcc32(0x72, "fim")                                 # jb fim
+    a.emit(b"\x50\x56\x57")                              # push eax; push esi; push edi
+    a.emit(b"\x8B\x35", d(Q_L))                          # mov esi, [L]
+    a.emit(b"\x85\xF6")                                  # test esi, esi
+    a.jcc32(0x74, "sai")                                 # jz sai
+    a.emit(b"\xA3", d(Q_ULTIMO))                         # mov [ULTIMO], eax
+    a.emit(b"\x56"); a.call_abs(ADDR_LUA_GETTOP); a.emit(b"\x83\xC4\x04")  # gettop(L)
+    a.emit(b"\x89\xC7")                                  # mov edi, eax
+    a.emit(b"\x68", d(Q_NOME))                           # push NOME
+    a.emit(b"\xFF\x35", d(Q_LEN))                        # push dword [LEN]
+    a.emit(b"\x68", d(Q_BUF))                            # push BUF
+    a.emit(b"\x56")                                      # push esi
+    a.call_abs(ADDR_LUA_DOBUFFER); a.emit(b"\x83\xC4\x10")
+    a.emit(b"\xA3", d(Q_STATUS))                         # mov [STATUS], eax
+    a.emit(b"\x57\x56"); a.call_abs(ADDR_LUA_SETTOP); a.emit(b"\x83\xC4\x08")  # settop(L, top)
+    a.emit(b"\xFF\x05", d(Q_CONTA))                      # inc dword [CONTA]
+    a.label("sai")
+    a.emit(b"\x5F\x5E\x58")                              # pop edi; pop esi; pop eax
+    a.label("fim")
+    a.emit(b"\xC3")                                      # ret (eax = t)
+    code = a.build()
+    if len(code) >= Q_ON:
+        raise ValueError("gancho por quadro grande demais")
+    return code
+
+
+PROCESS_SUSPEND_RESUME = 0x0800
+PAGE_EXECUTE_READ = 0x20
+_ntdll = ctypes.WinDLL("ntdll")
+_ntdll.NtSuspendProcess.argtypes = [wt.HANDLE]
+_ntdll.NtResumeProcess.argtypes = [wt.HANDLE]
+_k32.VirtualProtectEx.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t, wt.DWORD, ctypes.POINTER(wt.DWORD)]
+_k32.FlushInstructionCache.argtypes = [wt.HANDLE, ctypes.c_void_p, ctypes.c_size_t]
+
+
+def _trocar_codigo(pid, h, addr, dados):
+    """Escreve `dados` no codigo do jogo com o processo PAUSADO (nenhuma
+    thread pode estar no meio da instrucao sendo trocada)."""
+    hs = _k32.OpenProcess(PROCESS_SUSPEND_RESUME, False, pid)
+    if not hs:
+        raise ErroCliente("sem permissao pra pausar o jogo por um instante")
+    antigo = wt.DWORD()
+    try:
+        if _ntdll.NtSuspendProcess(hs) != 0:
+            raise ErroCliente("nao consegui pausar o jogo")
+        try:
+            if not _k32.VirtualProtectEx(h, ctypes.c_void_p(addr), len(dados), PAGE_EXECUTE_READWRITE,
+                                         ctypes.byref(antigo)):
+                raise ErroCliente("nao consegui liberar a escrita no codigo do jogo")
+            n = ctypes.c_size_t()
+            ok = _k32.WriteProcessMemory(h, ctypes.c_void_p(addr), dados, len(dados), ctypes.byref(n))
+            tmp = wt.DWORD()
+            _k32.VirtualProtectEx(h, ctypes.c_void_p(addr), len(dados), antigo.value, ctypes.byref(tmp))
+            _k32.FlushInstructionCache(h, ctypes.c_void_p(addr), len(dados))
+            if not ok or n.value != len(dados):
+                raise ErroCliente("nao consegui escrever no codigo do jogo")
+        finally:
+            _ntdll.NtResumeProcess(hs)
+    finally:
+        _k32.CloseHandle(hs)
+
+
+class _Repetidor:
+    """Liga/desliga a repeticao por quadro num ClienteLua ja conectado."""
+
+    def __init__(self, cliente):
+        self.c = cliente
+        self.bloco = None
+
+    def _destino_atual(self):
+        b = self.c._ler(ADDR_QUADRO_CALL, 5)
+        if not b or len(b) != 5:
+            raise ErroCliente("nao consegui ler o laco principal do jogo")
+        return b, (ADDR_QUADRO_CALL + 5 + struct.unpack("<i", b[1:])[0]) & 0xFFFFFFFF
+
+    def instalar(self):
+        if self.bloco:
+            return
+        c = self.c
+        atual, destino = self._destino_atual()
+        if atual == QUADRO_ORIGINAL:
+            bloco = _k32.VirtualAllocEx(c.h, None, TAM_BLOCO_Q, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+            if not bloco or bloco > 0xFFFFF000:
+                raise ErroCliente("nao consegui reservar memoria dentro do jogo (quadro)")
+            dados = bytearray(Q_BUF)
+            codigo = montar_gancho_quadro(bloco)
+            dados[: len(codigo)] = codigo
+            dados[Q_MAGIC:Q_MAGIC + len(MAGIC_Q)] = MAGIC_Q
+            dados[Q_NOME:Q_NOME + 6] = b"=botq\x00"
+            struct.pack_into("<I", dados, Q_INTERVALO, 200)
+            c._escrever(bloco, bytes(dados))
+            rel = bloco - (ADDR_QUADRO_CALL + 5)
+            _trocar_codigo(c.pid, c.h, ADDR_QUADRO_CALL, b"\xE8" + struct.pack("<i", rel))
+            self.bloco = bloco
+            log.info("Gancho por quadro instalado (pid %d).", c.pid)
+        elif atual[0] == 0xE8 and c._ler(destino + Q_MAGIC, len(MAGIC_Q)) == MAGIC_Q:
+            self.bloco = destino  # deixado por uma execucao anterior do bot
+            c._escrever(self.bloco + Q_ON, struct.pack("<I", 0))
+        else:
+            raise ErroCliente("outro programa ja mexeu no laco principal do jogo (outro bot aberto?) "
+                              "-- nao vou mexer.")
+
+    def iniciar(self, codigo_lua, intervalo_ms):
+        c = self.c
+        L = c._u32(c.bloco + OFF_LAST_L)
+        if not L:
+            c.executar("return 1")  # faz o gancho principal guardar o L
+            L = c._u32(c.bloco + OFF_LAST_L)
+        if not L:
+            raise ErroCliente("nao consegui o estado Lua do jogo")
+        self.instalar()
+        fonte = codigo_lua.encode("latin1")
+        if len(fonte) >= TAM_Q_BUF:
+            raise ErroCliente("trecho de Lua grande demais (quadro)")
+        b = self.bloco
+        c._escrever(b + Q_ON, struct.pack("<I", 0))
+        c._escrever(b + Q_BUF, fonte + b"\x00")
+        c._escrever(b + Q_LEN, struct.pack("<I", len(fonte)))
+        c._escrever(b + Q_L, struct.pack("<I", L))
+        c._escrever(b + Q_INTERVALO, struct.pack("<I", int(intervalo_ms)))
+        c._escrever(b + Q_ULTIMO, struct.pack("<I", 0))
+        self.renovar()
+        c._escrever(b + Q_ON, struct.pack("<I", 1))  # por ultimo
+
+    def renovar(self):
+        """Empurra o prazo de vida (chame a cada ~1 s enquanto repetir)."""
+        agora = self.c._u32(self.bloco + Q_AGORA)
+        self.c._escrever(self.bloco + Q_PRAZO, struct.pack("<I", (agora + PRAZO_MS) & 0xFFFFFFFF))
+
+    def ligado(self):
+        return bool(self.bloco) and self.c._u32(self.bloco + Q_ON) == 1
+
+    def contagem(self):
+        return self.c._u32(self.bloco + Q_CONTA) if self.bloco else 0
+
+    def status(self):
+        return self.c._u32(self.bloco + Q_STATUS) if self.bloco else 0
+
+    def parar(self):
+        if self.bloco:
+            try:
+                self.c._escrever(self.bloco + Q_ON, struct.pack("<I", 0))
+            except ErroCliente:
+                pass
+
+    def remover(self):
+        """Para e devolve os bytes originais do laco principal."""
+        if not self.bloco:
+            return
+        self.parar()
+        try:
+            atual, destino = self._destino_atual()
+            if destino == self.bloco:
+                _trocar_codigo(self.c.pid, self.c.h, ADDR_QUADRO_CALL, QUADRO_ORIGINAL)
+                log.info("Gancho por quadro removido (pid %d).", self.c.pid)
+        except ErroCliente as exc:
+            log.debug("Nao consegui remover o gancho por quadro: %s", exc)
+        self.bloco = None
 
 
 # ------------------------------------------- conexoes compartilhadas ----
