@@ -2,10 +2,10 @@
 Configura um perfil (conta, servidor, personagem) por texto, sem abrir a
 interface grafica -- util pra automacao/testes, ou se preferir so terminal.
 Pra gerenciar varias contas com mais conforto, use a interface grafica
-(rode "python bot.py" sem argumentos, ou de le TalismanLoginBot.exe).
+(rode "python bot.py" sem argumentos, ou de le BeastBot.exe).
 
 Onde ficam os dados: tudo (conta, servidor, nick e SENHA) e gravado no
-perfis.json, dentro de "Documentos/Bot Login - Talisman Online" -- FORA da
+perfis.json, dentro de "Documentos/BeastBot" -- FORA da
 pasta do bot, pra voce poder compartilhar o bot sem mandar suas contas
 junto. Nada e enviado pra internet.
 
@@ -17,7 +17,7 @@ com backup automatico da pasta Documentos em nuvem.
 Rode isso uma vez (ou de novo, se quiser atualizar os dados):
 
     python bot.py --setup
-    (ou, se ja tiver empacotado em .exe: TalismanLoginBot.exe --setup)
+    (ou, se ja tiver empacotado em .exe: BeastBot.exe --setup)
     (ou ainda, direto: python setup_perfil.py)
 """
 

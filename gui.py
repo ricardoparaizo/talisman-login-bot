@@ -36,7 +36,7 @@ import skin
 import ui_kit
 from paths import RESOURCE_DIR, USER_DATA_DIR
 
-APP_NAME = "Bot Login - Talisman Online"
+APP_NAME = "BeastBot"
 APP_VERSION = "v1.1"
 APP_AUTHOR = "TheSimitarBeast"
 APP_URL = "https://github.com/ricardoparaizo/talisman-login-bot"
@@ -314,10 +314,10 @@ class App(tk.Tk):
         if logo is not None:
             k.image(x0 + p, y0 + p + s(2), logo)
             tx += s(48)
-        k.text(tx, y0 + p - s(1), "Talisman Online", skin.TYPE["title2"], "bold",
+        k.text(tx, y0 + p - s(1), "BeastBot", skin.TYPE["title2"], "bold",
                family=skin.FONT_TITLE)
         by_y = y0 + p + s(24)
-        partes = [("Bot Login · by ", None), (APP_AUTHOR, "link"), (f"  ·  {APP_VERSION}", None)]
+        partes = [("Talisman Online · by ", None), (APP_AUTHOR, "link"), (f"  ·  {APP_VERSION}", None)]
         cx = tx
         for texto, tipo in partes:
             cor = skin.TEXT_SOFT if tipo else skin.TEXT_MUTED

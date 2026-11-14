@@ -78,8 +78,8 @@ Como usar via linha de comando / sem interface (avancado):
 
 Como usar via .exe (sem precisar de Python instalado pra RODAR -- so pra
 gerar o .exe na primeira vez):
-    1. build_exe.bat  (gera dist\\TalismanLoginBot\\TalismanLoginBot.exe)
-    2. TalismanLoginBot.exe   (abre a interface grafica)
+    1. build_exe.bat  (gera dist\\BeastBot.exe)
+    2. BeastBot.exe   (abre a interface grafica)
 """
 
 import json
@@ -163,7 +163,7 @@ def load_config():
     Isso existe porque, no .exe empacotado, o config.json original viaja
     dentro do proprio executavel -- mudar qualquer ajuste exigiria gerar o
     .exe de novo. Com essa sobreposicao, da pra colocar um config.json ao
-    lado do TalismanLoginBot.exe contendo SO as chaves que voce quer mudar
+    lado do BeastBot.exe contendo SO as chaves que voce quer mudar
     (ex: {"clear_field_presses": 0}) e testar na hora, sem recompilar."""
     cfg = load_json(CONFIG_PATH)
     override_path = BASE_DIR / "config.json"
@@ -1252,7 +1252,7 @@ def _show_fatal_error(exc_text):
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror(
-            "Talisman Online - Login Bot",
+            "BeastBot",
             "O bot encontrou um erro e precisou parar:\n\n"
             + exc_text[-1500:]
             + f"\n\nOs detalhes completos foram salvos em:\n{LOG_PATH}",

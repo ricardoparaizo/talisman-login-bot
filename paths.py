@@ -9,9 +9,10 @@ Onde cada coisa mora. Sao TRES lugares diferentes, de proposito:
 
     USER_DATA_DIR -- coisas do USUARIO (leitura e escrita): perfis.json com
                     as contas e senhas, e o bot.log. Fica em
-                    "Documentos/Bot Login - Talisman Online", FORA da pasta
-                    do bot. Assim da pra mandar o bot inteiro pra outra
-                    pessoa sem mandar suas contas junto.
+                    "Documentos/BeastBot", FORA da pasta do bot (assim
+                    gerar um .exe novo ou mexer no codigo nunca apaga as
+                    contas). Antes se chamava "Bot Login - Talisman Online";
+                    a pasta antiga e movida sozinha pro nome novo.
 
     BASE_DIR     -- a pasta onde o bot esta (o .exe ou o codigo). Usada so
                     pra achar o PARAR.txt e pra migrar arquivos antigos.
@@ -24,7 +25,8 @@ comporta normalmente, entao usamos a pasta do proprio .exe.
 import sys
 from pathlib import Path
 
-APP_FOLDER_NAME = "Bot Login - Talisman Online"
+APP_FOLDER_NAME = "BeastBot"
+APP_FOLDER_ANTIGO = "Bot Login - Talisman Online"  # nome ate 2026-11-14
 
 if sys.platform == "win32":
     # Sem isso, o processo roda "DPI-unaware": o Windows escala as
@@ -106,7 +108,22 @@ def _documents_dir():
     return Path.home()
 
 
-USER_DATA_DIR = _documents_dir() / APP_FOLDER_NAME
+def _migrar_pasta_antiga(documentos):
+    """Se so existe a pasta com o nome antigo, renomeia pra o nome novo
+    (contas, log e caves recentes vao junto). Se nao der (arquivo aberto,
+    permissao), continua usando a antiga -- nunca perde o cadastro."""
+    nova = documentos / APP_FOLDER_NAME
+    antiga = documentos / APP_FOLDER_ANTIGO
+    if nova.exists() or not antiga.is_dir():
+        return nova
+    try:
+        antiga.rename(nova)
+        return nova
+    except OSError:
+        return antiga
+
+
+USER_DATA_DIR = _migrar_pasta_antiga(_documents_dir())
 
 
 def ensure_user_data_dir():

@@ -4,7 +4,7 @@ senha). Fica tudo num perfis.json unico.
 
 ONDE ESSE ARQUIVO MORA -- e o ponto importante:
     Ele NAO fica na pasta do bot. Fica em
-    "Documentos/Bot Login - Talisman Online/perfis.json".
+    "Documentos/BeastBot/perfis.json".
 
     O motivo e simples: assim voce pode mandar a pasta do bot (ou o .exe)
     pra qualquer pessoa sem mandar suas contas e senhas junto. O bot e o

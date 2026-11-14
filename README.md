@@ -1,88 +1,74 @@
-# Bot Login — Talisman Online
+# BeastBot — Talisman Online
 
-Automatiza a parte chata de entrar no Talisman Online: digita conta e senha, escolhe servidor e personagem, espera a fila e reconecta sozinho quando a conexão cai. Dá pra deixar várias contas logando ao mesmo tempo.
+Bot de uso pessoal para tirar as filas do Talisman Online do caminho:
 
-Ele **não joga por você** — não anda, não farma, não luta. É só o login.
+- **Login automático**: digita conta e senha, escolhe servidor e personagem, espera a fila de login e reconecta quando a conexão cai. Várias contas ao mesmo tempo, cada uma na sua cópia do jogo.
+- **Entrar na cave**: com o personagem perto do NPC da cave, o bot conversa com o NPC e repete o pedido de entrada até pegar vaga, sem você ficar clicando.
 
-![Interface do bot](docs/preview.png)
+Ele **não joga por você** — não anda, não farma, não luta.
 
 ## Como funciona
 
-O bot olha a janela do jogo, reconhece em que tela você está comparando com imagens de referência, e clica no lugar certo. Em vez de mover o mouse de verdade, ele manda o clique direto pra janela do jogo pelo próprio Windows — então **você continua usando o PC normalmente** enquanto ele trabalha. A única exigência é não minimizar a janela do jogo (pode ficar atrás de outras).
+**Login** — o bot olha a janela do jogo, reconhece em que tela está comparando com imagens de referência (`templates/`) e clica no lugar certo. O clique vai direto pra janela pelo Windows, sem mover o mouse, então dá pra usar o PC normalmente. A janela do jogo não pode ficar minimizada (pode ficar atrás de outras). Na tela de fila ele só espera.
 
-Na tela de fila ele nunca clica em nada, nem no "Cancel" — só espera e avisa no log.
+**Cave** — o bot roda trechos de Lua dentro da interface do próprio jogo (`cliente_lua.py`):
 
-## Instalando
+1. Abre o diálogo do NPC da cave (o servidor só aceita o pedido de entrar de quem conversou com o NPC).
+2. Manda o pedido de entrar (`RequestIntoEctype`), 1 a cada 200 ms, de dentro do laço principal do jogo.
+3. Para quando o personagem muda de mapa (entrou), morre, passa do tempo limite (`cave_limite_minutos` no `config.json`) ou quando você clica em Parar.
 
-### Opção 1 — rodando o código (recomendada)
+Antes de mexer na memória do jogo, o bot confere byte a byte que a versão do `client.exe` é a que ele conhece; se for outra, ele não injeta nada. Ao parar, tudo o que foi mudado no jogo é desfeito.
 
-Precisa de [Python 3.9+](https://www.python.org/downloads/) no Windows, com a opção **"Add python.exe to PATH"** marcada na instalação.
+## Rodando
+
+Precisa de [Python 3.9+](https://www.python.org/downloads/) no Windows, com **"Add python.exe to PATH"** marcado.
 
 ```
-git clone https://github.com/ricardoparaizo/talisman-login-bot.git
-cd talisman-login-bot
 pip install -r requirements.txt
 python bot.py
 ```
 
-### Opção 2 — gerando um .exe
+Ou rode o `build_exe.bat` para gerar `dist\BeastBot.exe`, um arquivo único que roda sem Python.
 
-Rode o `build_exe.bat`. Ele instala o que falta e gera `dist\TalismanLoginBot.exe`, um arquivo único que roda em qualquer PC Windows sem precisar de Python instalado.
-
-Se preferir baixar o `.exe` pronto, ele está nas [Releases](https://github.com/ricardoparaizo/talisman-login-bot/releases) — mas leia a seção sobre antivírus antes.
+Use **uma cópia do bot por vez**: duas cópias conectadas no mesmo jogo brigam pelo mesmo gancho.
 
 ## Usando
 
-1. Abra o bot e clique em **+ Nova conta**.
-2. Preencha login, senha, servidor e nick.
-3. Em **Pasta do jogo**, aponte onde o Talisman está instalado (a pasta que tem o `game.exe`). Com isso preenchido, o bot abre o jogo sozinho; deixando em branco, você abre o jogo antes de iniciar.
-4. Clique em **Salvar conta**.
-5. Marque a caixinha da conta pra iniciar o login. Desmarcar para.
+**Contas**
 
-**Iniciar todas** sobe todas as contas de uma vez — cada uma numa cópia própria do jogo. Clique com o **botão direito** numa conta pra editar ou remover (é o único jeito de editar uma conta já cadastrada).
+1. Clique em **+ Nova conta** e preencha login, senha, servidor e nick.
+2. Em **Pasta do jogo**, aponte a pasta do Talisman (a que tem o `game.exe`) para o bot abrir o jogo sozinho.
+3. Selecione a conta na lista e clique em **Iniciar Login**. Botão direito numa conta edita ou remove.
 
-## Onde ficam seus dados
+**Entrar Cave**
 
-Tudo fica em `Documentos\Bot Login - Talisman Online\`, **fora da pasta do bot**. Isso é de propósito: você pode mandar o bot (ou o `.exe`) pra qualquer pessoa sem mandar suas contas junto.
+1. Deixe o personagem logado e perto do NPC da cave.
+2. Selecione a conta (a lista mostra quais estão online), escolha a cave e clique em **Entrar**.
 
-Nada é enviado pra internet — o bot não faz nenhuma conexão de rede.
+## Onde ficam os dados
 
-> ⚠️ **As senhas ficam em texto legível** no `perfis.json`, para você poder abrir e conferir exatamente o que está salvo. Em compensação, quem tiver acesso a esse arquivo lê as senhas. Não compartilhe o `perfis.json`, e tome cuidado se a sua pasta Documentos tem backup automático em nuvem.
+Em `Documentos\BeastBot\`, fora da pasta do bot: contas (`perfis.json`), log (`bot.log`) e as caves usadas por último. Se existir a pasta antiga (`Documentos\Bot Login - Talisman Online`), o bot a renomeia sozinho na primeira abertura.
 
-## Sobre o antivírus
+> ⚠️ As senhas ficam legíveis no `perfis.json`. Cuidado com backup automático da pasta Documentos em nuvem.
 
-Alguns antivírus marcam o `.exe` como suspeito. **É falso positivo**, e vale entender o motivo antes de decidir se você confia:
+O bot não faz nenhuma conexão de rede própria.
 
-A causa é o PyInstaller, a ferramenta que transforma código Python em `.exe`. O "miolo" que ele injeta é idêntico em todo programa feito com ele — inclusive nos maliciosos — então os antivírus que usam machine learning marcam por semelhança. Some a isso um arquivo sem assinatura digital e sem reputação. Repare que as detecções costumam ter nome genérico (`Wacatac`, `Trojan.Blank`) e sufixo `!ml`, que é a própria Microsoft dizendo "isso foi um modelo estatístico, não uma assinatura de vírus conhecido".
+## Se alguma tela de login não for reconhecida
 
-Se você prefere não confiar num `.exe` de estranho — o que é uma postura sensata para um programa que digita sua senha — **use a Opção 1**. O código é Python puro e legível, dá pra ler tudo antes de rodar.
+A interface do Talisman é desenhada em tamanho fixo (em pixels), então os templates valem em qualquer resolução do jogo. Se o jogo mudar o visual de alguma tela, o log avisa que não reconheceu; tire um print da janela, recorte o pedaço equivalente e substitua o arquivo em `templates/` (o `config.json` lista o que cada um representa).
 
-## Se alguma tela não for reconhecida
-
-O bot identifica as telas comparando com os recortes em `templates/`. Eles foram capturados em ~1024x768, mas funcionam em qualquer resolução do jogo (800x600 até 1920x1080) sem precisar redimensionar — a interface do Talisman é desenhada em tamanho fixo (em pixels), independente da resolução escolhida; só a quantidade de cenário ao redor muda.
-
-Se o jogo atualizar a interface, ou se o seu servidor tiver um visual diferente, algum template pode parar de bater — o log vai avisar que não reconheceu a tela. Nesse caso, tire um print da janela do jogo, recorte o pedaço equivalente e substitua o arquivo em `templates/`. O `config.json` lista o que cada um representa.
-
-O template de personagem é específico do nick que estava na tela quando foi capturado. Se o seu personagem tem outro nome, o bot ignora essa etapa e clica direto em "Enter Game", assumindo que o servidor já deixou o personagem certo selecionado.
-
-## Aviso
-
-Automatizar login pode não ser oficialmente suportado pela publisher do jogo, e o risco (banimento, etc.) é seu. Os atrasos aleatórios entre as ações ajudam a não martelar o servidor, mas não são garantia de nada. Use com bom senso.
-
-## Arquivos do projeto
+## Arquivos
 
 | Arquivo | O que faz |
 |---|---|
-| `bot.py` | Motor: reconhece as telas e decide o que clicar |
-| `gui.py` | Interface gráfica (CustomTkinter) |
-| `profiles.py` | Contas e senhas, salvos em Documentos |
+| `bot.py` | Login: reconhece as telas e decide o que clicar |
+| `gui.py`, `ui_kit.py`, `skin.py` | Interface (canvas com vidro, no estilo Apple) |
+| `cave.py` | Entrar na cave |
+| `cliente_lua.py` | Roda Lua dentro do jogo (gancho no `uiGetglobal` e gancho por quadro) |
+| `profiles.py` | Contas, salvas em Documentos |
 | `win_input.py` | Clique e digitação em segundo plano, via Windows |
-| `screen_match.py` | Comparação de imagem e ajuste de escala |
+| `screen_match.py` | Comparação de imagem |
 | `paths.py` | Onde cada coisa mora (programa × usuário) |
 | `config.json` | Ajustes finos e lista de templates |
-| `templates/` | Recortes das telas do jogo usados no reconhecimento |
-| `build_exe.bat` | Gera o `.exe` na sua máquina |
-
-## Licença
-
-MIT — veja [LICENSE](LICENSE).
+| `templates/` | Recortes das telas do jogo |
+| `build_exe.bat` | Gera o `.exe` |

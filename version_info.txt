@@ -1,4 +1,4 @@
-# Metadados de versao gravados dentro do TalismanLoginBot.exe.
+# Metadados de versao gravados dentro do BeastBot.exe.
 #
 # Por que isso existe: um .exe SEM esses campos (sem nome, sem fabricante,
 # sem versao) e um sinal classico de arquivo suspeito pros antivirus que
@@ -26,12 +26,12 @@ VSVersionInfo(
         StringTable(
           '041604B0',
           [StringStruct('CompanyName', 'The Simitar Beast'),
-           StringStruct('FileDescription', 'Talisman Online - Login Bot'),
+           StringStruct('FileDescription', 'BeastBot - Talisman Online'),
            StringStruct('FileVersion', '1.1.0.0'),
-           StringStruct('InternalName', 'TalismanLoginBot'),
+           StringStruct('InternalName', 'BeastBot'),
            StringStruct('LegalCopyright', 'The Simitar Beast'),
-           StringStruct('OriginalFilename', 'TalismanLoginBot.exe'),
-           StringStruct('ProductName', 'Talisman Online - Login Bot'),
+           StringStruct('OriginalFilename', 'BeastBot.exe'),
+           StringStruct('ProductName', 'BeastBot'),
            StringStruct('ProductVersion', '1.1.0.0'),
            StringStruct('Comments', 'Automatiza o login e a entrada em caves no Talisman Online. Nao envia dados para lugar nenhum.')])
       ]),
