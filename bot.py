@@ -916,7 +916,14 @@ class Bot:
                 self.log.info("Abrindo o jogo...")
                 self.log.debug("Launcher %s aberto com pid %d.", launcher_path, proc.pid)
             except Exception as exc:  # noqa: BLE001
-                self.log.error("Nao consegui abrir o jogo: %s", exc)
+                if getattr(exc, "winerror", None) == 740:
+                    self.log.error(
+                        "Nao consegui abrir o jogo: o launcher exige administrador. "
+                        "Feche o BeastBot e abra de novo com o botao direito > "
+                        "'Executar como administrador'."
+                    )
+                else:
+                    self.log.error("Nao consegui abrir o jogo: %s", exc)
                 # Nao conseguiu nem abrir -- libera a vez pra proxima conta
                 # em vez de segurar o lock esperando um launcher que nunca
                 # vai existir.

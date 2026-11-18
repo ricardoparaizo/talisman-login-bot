@@ -36,6 +36,7 @@ echo.
 
 python -m PyInstaller --onefile --noupx --windowed --noconfirm --name BeastBot ^
     --icon=icon.ico ^
+    --uac-admin ^
     --version-file=version_info.txt ^
     --add-data "templates;templates" ^
     --add-data "assets;assets" ^
