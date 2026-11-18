@@ -180,10 +180,25 @@ return "NAO"
 """
 
 # Conversa com o NPC sem clique: e a funcao que o guia do proprio jogo usa
-# (chamada com um numero so, o id do NPC). Ela acha o NPC perto com esse id e
-# manda ao servidor o mesmo evento "interagir" do clique; se nao houver NPC
-# com esse id por perto, nao faz nada (visto no codigo do client).
-_LUA_FALAR_NPC = 'uiUserHelpInteractiveByClassId(%(npc)d); return "ok"'
+# (chamada com um numero so, o id do NPC). Ela procura entre os objetos
+# carregados um NPC com esse id e manda ao servidor o mesmo evento
+# "interagir" do clique.
+#
+# CUIDADO -- bug do proprio jogo (derrubou o client em 2026-11-14): a busca
+# guarda em cache o ultimo id pesquisado e os objetos achados. Chamando de
+# novo com o MESMO id depois que aquele NPC sumiu (o personagem mudou de
+# mapa), o jogo usa o cache velho, acha "1 NPC" numa lista vazia e cai
+# (0xC000000D, checagem de iterador). Por isso o cache e limpo antes e
+# depois: uma busca com um id que nao pode existir (os ids dos NPCs cabem em
+# 16 bits) forca uma busca nova e vazia. Com a busca nova, NPC que nao esta
+# perto nao e achado e a funcao nao faz nada.
+_ID_LIMPA_CACHE = 2147483647
+_LUA_FALAR_NPC = (
+    "uiUserHelpInteractiveByClassId(%(limpa)d)\n"
+    "uiUserHelpInteractiveByClassId(%(npc)d)\n"
+    "uiUserHelpInteractiveByClassId(%(limpa)d)\n"
+    'return "ok"'
+)
 
 
 def _falar_com_npc(c, stop_event, p, numero):
@@ -192,7 +207,7 @@ def _falar_com_npc(c, stop_event, p, numero):
     if not npc:
         return False
     try:
-        c.executar(_LUA_FALAR_NPC % {"npc": npc}, timeout=3.0)
+        c.executar(_LUA_FALAR_NPC % {"npc": npc, "limpa": _ID_LIMPA_CACHE}, timeout=3.0)
     except cliente_lua.ErroCliente as exc:
         log.debug("%sCave: nao consegui falar com o NPC %d: %s", p, npc, exc)
         return False
