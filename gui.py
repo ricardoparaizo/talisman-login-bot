@@ -120,6 +120,9 @@ class App(tk.Tk):
         # Conta cujo "Entrar" foi clicado antes do jogo dela ser encontrado:
         # a cave comeca sozinha assim que a deteccao achar (ver _toggle_cave).
         self._cave_pendente = None
+        # Pet patch (pet_patch.py): aplicado sozinho em cada jogo assim que o
+        # personagem loga (ver _cave_detect).
+        self._pet_patch = bool(bot.load_config().get("pet_patch", True))
         import cave
 
         self._caves = {cave.rotulo(*c): c for c in cave.lista_caves()}
@@ -902,6 +905,16 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 bot.log.exception("Cave: erro ao procurar os jogos abertos.")
                 achados = []
+            if self._pet_patch and achados:
+                # So depois que o personagem entra no mundo (a deteccao leu o
+                # nick dele); cada jogo e conferido uma vez so.
+                try:
+                    import pet_patch
+
+                    pet_patch.garantir([pid for pid, nome in achados if nome],
+                                       abertos=[pid for pid, _ in achados])
+                except Exception:  # noqa: BLE001
+                    bot.log.exception("Pet patch: erro inesperado.")
             self.cave_queue.put(("online", achados))
 
         threading.Thread(target=trabalho, daemon=True).start()

@@ -57,6 +57,8 @@
   "_nota_config_ao_lado_do_exe": "Da pra criar um config.json na MESMA PASTA do BeastBot.exe contendo so as chaves que voce quer mudar (exemplo: {\"clear_field_presses\": 0}). Elas sobrescrevem as daqui SEM precisar gerar o .exe de novo.",
   "cave_limite_minutos": 10,
   "_nota_cave": "Entrar na cave: o bot repete o pedido de entrar ate o personagem entrar, morrer, ou passar 'cave_limite_minutos' (0 = sem limite). Antes de comecar, o bot conversa sozinho com o NPC da cave (o personagem precisa estar perto dele) e depois manda 1 pedido a cada 200 ms.",
+  "pet_patch": true,
+  "_nota_pet_patch": "Protege o jogo do crash de quem spama pet na frente do teleporte: assim que o personagem loga, o bot troca 1 byte no client.exe dele pra o pet de quem teleporta sumir na hora, em vez de ir pra lista de remocao atrasada (mesma ideia do 'Pet crash fix lite' do RaaskiBot). Fica aplicado ate o jogo fechar. false = nao mexe.",
   "server_missing_timeout_seconds": 8,
   "_nota_server_missing_timeout_seconds": "Se o servidor cadastrado no perfil nao aparecer na lista por esse tanto de segundos (ele some da lista quando esta offline), o bot cancela e volta pro login pra tentar de novo, em vez de arriscar entrar em outro servidor selecionado por padrao.",
   "_nota_resolucao": "Os templates foram capturados com o jogo em ~1024x768, mas a interface do Talisman e desenhada em tamanho fixo (em pixels) -- ela NAO escala com a resolucao, so muda quanto cenario aparece ao redor. Por isso o bot procura os templates sempre no tamanho original, em qualquer resolucao (800x600 a 1920x1080), sem redimensionar. base_resolution_width/height ficam aqui so por compatibilidade; nao precisam ser ajustados.",
